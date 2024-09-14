@@ -1,0 +1,29 @@
+{
+  "name": "danmachat-service-server",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "start": "node --env-file=.env ./build/index.js",
+    "dev": "node --env-file=.env --watch --import ./scripts/register.js src/index.ts"
+  },
+  "imports": {
+    "@/*": "./src/*"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "ts-node": "^10.9.2",
+    "tsx": "^4.17.0"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  }
+}
