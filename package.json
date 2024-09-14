@@ -7,6 +7,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc",
     "start": "node --env-file=.env ./build/index.js",
+    "start-bun": "bun src/index.ts",
     "dev": "node --env-file=.env --watch --import ./scripts/register.js src/index.ts",
     "dev-bun": "bun --watch src/index.ts"
   },
