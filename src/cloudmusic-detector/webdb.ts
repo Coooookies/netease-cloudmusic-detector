@@ -3,6 +3,8 @@ import { CLOUDMUSIC_WEBDB_PATH } from "./constant.js"
 import type { Statement } from "better-sqlite3"
 import type { PlayingStatusTrack } from "./types.js"
 
+// 备用代码，暂未启用
+
 export default class Webdb {
   private readonly db = new sqlite(CLOUDMUSIC_WEBDB_PATH)
   private readonly commandQueryCurrentSongDetail: Statement<
