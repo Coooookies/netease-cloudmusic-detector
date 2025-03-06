@@ -4,7 +4,7 @@ import { type PlayingStatusType } from "./types.js"
 
 export function getElogHeader(row: string) {
   const regex =
-    /^\[(\d+):(\d+):(\d{4}\/\d{6}:\d{8}):([A-Z]+):([a-zA-Z0-9._-]+)\((\d+)\)\]\s+\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/
+    /^\[(\d+):(\d+):(\d{4}\/\d{6}:\d+):([A-Z]+):([a-zA-Z0-9._-]+)\((\d+)\)\]\s+\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/
 
   const [origin, pid, tid, timestamp, type, src, lr, datetime] =
     row.match(regex) || []
