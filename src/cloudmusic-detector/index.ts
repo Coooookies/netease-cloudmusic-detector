@@ -238,6 +238,7 @@ export class CloudmusicDetector extends Nanobus<{
   //   this.currentSongArtistNames = detail.artists.map((item) => item.name)
   //   this.currentSongDuration = detail.duration / 1000
   // }
+
   private async refreshCurrentSongDetail(trackStatus: PlayingStatus) {
     const detail = trackStatus.trackIn.track
 
