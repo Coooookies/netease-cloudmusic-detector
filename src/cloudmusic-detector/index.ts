@@ -1,7 +1,7 @@
 import Nanobus from "nanobus"
-import { ElogListener } from "./elog-listener.js"
+import ElogAnalysis from "./elog-analysis.js"
+import ElogListener from "./elog-listener.js"
 import { CLOUDMUSIC_ELOG_MATCHES } from "./constant.js"
-import { getElogHeader, getElogType } from "./elog-analysis.js"
 
 export class CloudmusicDetector extends Nanobus<{
   play: (songId: number) => void
@@ -41,7 +41,7 @@ export class CloudmusicDetector extends Nanobus<{
     let songPausing = false
 
     line: for (const line of lines.reverse()) {
-      const headers = getElogHeader(line)
+      const headers = ElogAnalysis.getHeader(line)
 
       if (!headers) {
         continue
@@ -49,7 +49,7 @@ export class CloudmusicDetector extends Nanobus<{
 
       records.unshift(line)
 
-      switch (getElogType(line)) {
+      switch (ElogAnalysis.getType(line)) {
         case "EXIT": {
           this.resetState()
           return
@@ -70,13 +70,13 @@ export class CloudmusicDetector extends Nanobus<{
     let lastActionTime = songPlayTime
 
     for (const line of records) {
-      const headers = getElogHeader(line)
+      const headers = ElogAnalysis.getHeader(line)
 
       if (!headers) {
         continue
       }
 
-      switch (getElogType(line)) {
+      switch (ElogAnalysis.getType(line)) {
         // 进度拖拽
         case "SET_PLAYING_POSITION": {
           const parser = CLOUDMUSIC_ELOG_MATCHES.SET_PLAYING_POSITION
@@ -125,13 +125,13 @@ export class CloudmusicDetector extends Nanobus<{
 
   private bindEvents() {
     this.listener.on("line", (line) => {
-      const headers = getElogHeader(line)
+      const headers = ElogAnalysis.getHeader(line)
 
       if (!headers) {
         return
       }
 
-      switch (getElogType(line)) {
+      switch (ElogAnalysis.getType(line)) {
         // 软件退出
         case "EXIT": {
           this.resetState()

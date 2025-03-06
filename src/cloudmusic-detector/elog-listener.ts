@@ -1,10 +1,10 @@
 import fs from "node:fs"
 import fsPromises from "node:fs/promises"
 import Nanobus from "nanobus"
-import { decode } from "./decoding.js"
+import ElogAnalysis from "./elog-analysis.js"
 import { CLOUDMUSIC_ELOG_PATH } from "./constant.js"
 
-export class ElogListener extends Nanobus<{
+export default class ElogListener extends Nanobus<{
   line: (line: string) => void
 }> {
   private fileSize = 0
@@ -23,7 +23,7 @@ export class ElogListener extends Nanobus<{
 
     stream.on("data", (chunkBuffer: Buffer) => {
       const dataArray = new Uint8Array(chunkBuffer)
-      const lines = decode(dataArray).split("\n")
+      const lines = ElogAnalysis.decode(dataArray).split("\n")
       this.emitLine(lines)
     })
 
@@ -35,7 +35,7 @@ export class ElogListener extends Nanobus<{
 
     const buffer = await fsPromises.readFile(this.filePath)
     const dataArray = new Uint8Array(buffer)
-    const lines = decode(dataArray).split("\n")
+    const lines = ElogAnalysis.decode(dataArray).split("\n")
 
     this.fileSize = buffer.length
     fs.watchFile(this.filePath, this.watchOption, this._watchListener)
