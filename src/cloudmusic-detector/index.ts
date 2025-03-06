@@ -1,7 +1,9 @@
 import Nanobus from "nanobus"
+import Webdb from "./webdb.js"
 import ElogAnalysis from "./elog-analysis.js"
 import ElogListener from "./elog-listener.js"
 import { CLOUDMUSIC_ELOG_MATCHES } from "./constant.js"
+import type { DetectorStatus, PlayingStatus } from "./types.js"
 
 export class CloudmusicDetector extends Nanobus<{
   play: (songId: number) => void
@@ -9,8 +11,15 @@ export class CloudmusicDetector extends Nanobus<{
   position: (position: number) => void
 }> {
   private listener = new ElogListener()
+  private webdb = new Webdb()
 
   private currentSongId = -1
+  private currentSongName = ""
+  private currentSongCover = ""
+  private currentSongAlbumName = ""
+  private currentSongArtistNames: string[] = []
+  private currentSongDuration = 0
+
   private currentSongPosition = 0
   private currentSongPausing = false
   private currentSongRelativeTime = 0
@@ -21,7 +30,7 @@ export class CloudmusicDetector extends Nanobus<{
   }
 
   public start() {
-    this.listener
+    return this.listener
       .start()
       .then((lines) => this.preloadLines(lines))
       .catch(() => {})
@@ -39,6 +48,7 @@ export class CloudmusicDetector extends Nanobus<{
     let songPlayTime = 0
     let songPosition = 0
     let songPausing = false
+    let songTrackDetail: PlayingStatus | null = null
 
     line: for (const line of lines.reverse()) {
       const headers = ElogAnalysis.getHeader(line)
@@ -53,6 +63,7 @@ export class CloudmusicDetector extends Nanobus<{
         case "EXIT": {
           this.resetState()
           return
+          // return Promise.resolve()
         }
         case "SET_PLAYING": {
           const parser = CLOUDMUSIC_ELOG_MATCHES.SET_PLAYING
@@ -61,6 +72,7 @@ export class CloudmusicDetector extends Nanobus<{
           if (data !== null && songId === -1) {
             songId = +data.trackIn.trackId
             songPlayTime = headers.timestamp
+            songTrackDetail = data
           }
           break line
         }
@@ -121,6 +133,8 @@ export class CloudmusicDetector extends Nanobus<{
     this.currentSongPausing = songPausing
     this.currentSongPosition = songPausing ? songPosition : 0
     this.currentSongRelativeTime = songPausing ? 0 : now - songPosition * 1000
+    this.refreshCurrentSongDetail(songTrackDetail!)
+    // return this.refreshCurrentSongDetail()
   }
 
   private bindEvents() {
@@ -151,7 +165,12 @@ export class CloudmusicDetector extends Nanobus<{
           this.currentSongPausing = true
           this.currentSongPosition = 0
           this.currentSongRelativeTime = 0
+          this.refreshCurrentSongDetail(data)
           this.emit("play", this.currentSongId)
+          // this.refreshCurrentSongDetail().then(() => {
+          //   this.emit("play", this.currentSongId)
+          // })
+
           break
         }
 
@@ -206,21 +225,54 @@ export class CloudmusicDetector extends Nanobus<{
     this.currentSongRelativeTime = 0
   }
 
-  public get status() {
+  // private async refreshCurrentSongDetail() {
+  //   const detail = await this.webdb.waitForSongDetail(this.currentSongId)
+
+  //   if (!detail) {
+  //     return
+  //   }
+
+  //   this.currentSongName = detail.name
+  //   this.currentSongCover = detail.album.cover
+  //   this.currentSongAlbumName = detail.album.name
+  //   this.currentSongArtistNames = detail.artists.map((item) => item.name)
+  //   this.currentSongDuration = detail.duration / 1000
+  // }
+  private async refreshCurrentSongDetail(trackStatus: PlayingStatus) {
+    const detail = trackStatus.trackIn.track
+
+    this.currentSongName = detail.name
+    this.currentSongCover = detail.album.cover
+    this.currentSongAlbumName = detail.album.name
+    this.currentSongArtistNames = detail.artists.map((item) => item.name)
+    this.currentSongDuration = detail.duration / 1000
+  }
+
+  public get status(): DetectorStatus {
     const now = Date.now()
 
     return this.currentSongId === -1
       ? {
+          available: false,
           id: -1,
           playing: false,
           position: 0,
+          duration: 0,
         }
       : {
+          available: true,
           id: this.currentSongId,
           playing: !this.currentSongPausing,
           position: this.currentSongPausing
             ? this.currentSongPosition
             : (now - this.currentSongRelativeTime) / 1000,
+          duration: this.currentSongDuration,
+          detail: {
+            name: this.currentSongName,
+            cover: this.currentSongCover,
+            albumName: this.currentSongAlbumName,
+            artistNames: this.currentSongArtistNames,
+          },
         }
   }
 }

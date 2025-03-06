@@ -12,6 +12,11 @@ export const CLOUDMUSIC_ELOG_PATH = path.join(
   "\\cloudmusic.elog"
 )
 
+export const CLOUDMUSIC_WEBDB_PATH = path.join(
+  CLOUDMUSIC_DIR,
+  "\\Library\\webdb.dat"
+)
+
 export const CLOUDMUSIC_ELOG_MATCHES = {
   EXIT: {
     rule: (row: string) => row.includes(`【app】,{"actionId":"exitApp"}`),

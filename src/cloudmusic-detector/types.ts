@@ -5,9 +5,9 @@ export type PlayingStatusID = string
 export type PlayingStatusArtist = {
   id: PlayingStatusID
   name: string
-  alia: string[]
-  alias: string[]
-  transName: string
+  alia?: string[]
+  alias?: string[]
+  transName?: string
 }
 
 export type PlayingStatusAlbum = {
@@ -46,19 +46,19 @@ export type PlayingStatusPrivilege = {
   maxDownBr: number
   commentPriv: number
   cloudSong: number
-  toast: boolean
+  toast?: boolean
   flag: number
-  now: number
+  now?: number
   maxSongBr: number
   maxFreeBr: number
-  sharePriv: number
+  sharePriv?: number
   status: number
   subPriv: number
-  maxSongLevel: number
-  maxDownLevel: number
-  maxFreeLevel: number
-  maxPlayLevel: number
-  freeTrialPrivilege: PlayingStatusFreeTrialPrivilege
+  maxSongLevel?: number
+  maxDownLevel?: number
+  maxFreeLevel?: number
+  maxPlayLevel?: number
+  freeTrialPrivilege?: PlayingStatusFreeTrialPrivilege
 }
 
 export type PlayingStatusTrack = {
@@ -77,8 +77,8 @@ export type PlayingStatusTrack = {
   artists: PlayingStatusArtist[]
   privilege: PlayingStatusPrivilege
   album: PlayingStatusAlbum
-
   algorithm: string
+  transNames?: string[]
 }
 
 export type PlayingStatusLocalTrack = Record<string, unknown>
@@ -106,6 +106,7 @@ export type PlayingStatusReferInfo = {
 
 // Main component types
 export type PlayingStatusTrackIn = {
+  id: PlayingStatusID
   displayOrder: number
   randomOrder: number
   isPlayedOnce: boolean
@@ -133,3 +134,27 @@ export type PlayingStatus = {
 }
 
 export type PlayingStatusType = keyof typeof CLOUDMUSIC_ELOG_MATCHES
+
+export type DetectorAvailableStatus = {
+  available: true
+  id: number
+  playing: boolean
+  position: number
+  duration: number
+  detail?: {
+    name: string
+    cover: string
+    albumName: string
+    artistNames: string[]
+  }
+}
+
+export type DetectorUnavailableStatus = {
+  available: false
+  id: -1
+  playing: false
+  position: 0
+  duration: number
+}
+
+export type DetectorStatus = DetectorAvailableStatus | DetectorUnavailableStatus

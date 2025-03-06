@@ -20,6 +20,8 @@
     "typescript": "^5.5.4"
   },
   "dependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "better-sqlite3": "^11.8.1",
     "nanobus": "^4.5.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.17.0"
