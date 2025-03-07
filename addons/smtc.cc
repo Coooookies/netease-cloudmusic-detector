@@ -88,13 +88,17 @@ Napi::Object SMTCMedia::Init(Napi::Env env, Napi::Object exports)
 {
   Napi::HandleScope scope(env);
 
-  Napi::Function func = DefineClass(env, "SMTCMedia", {
-                                                          InstanceMethod("getSessions", &SMTCMedia::GetSessions),
-                                                          InstanceMethod("getCurrentSession", &SMTCMedia::GetCurrentSession),
-                                                          InstanceMethod("getSessionInfo", &SMTCMedia::GetSessionInfo),
-                                                          InstanceMethod("on", &SMTCMedia::On),
-                                                          InstanceMethod("off", &SMTCMedia::Off),
-                                                      });
+  Napi::Function func =
+      DefineClass(
+          env,
+          "SMTCMedia",
+          {
+              InstanceMethod("getSessions", &SMTCMedia::GetSessions),
+              InstanceMethod("getCurrentSession", &SMTCMedia::GetCurrentSession),
+              InstanceMethod("getSessionInfo", &SMTCMedia::GetSessionInfo),
+              InstanceMethod("on", &SMTCMedia::On),
+              InstanceMethod("off", &SMTCMedia::Off),
+          });
 
   constructor = Napi::Persistent(func);
   constructor.SuppressDestruct();
