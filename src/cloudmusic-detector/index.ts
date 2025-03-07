@@ -70,7 +70,7 @@ export class CloudmusicDetector extends Nanobus<{
           const data = parser.args(line)
 
           if (data !== null && songId === -1) {
-            songId = +data.trackIn.trackId
+            songId = +data.trackIn.track.id
             songPlayTime = headers.timestamp
             songTrackDetail = data
           }
@@ -145,6 +145,9 @@ export class CloudmusicDetector extends Nanobus<{
         return
       }
 
+      const now = Date.now()
+      const offset = (now - headers.timestamp) / 1000
+
       switch (ElogAnalysis.getType(line)) {
         // 软件退出
         case "EXIT": {
@@ -161,7 +164,7 @@ export class CloudmusicDetector extends Nanobus<{
             break
           }
 
-          this.currentSongId = +data.trackIn.trackId
+          this.currentSongId = +data.trackIn.track.id
           this.currentSongPausing = true
           this.currentSongPosition = 0
           this.currentSongRelativeTime = 0
@@ -186,7 +189,7 @@ export class CloudmusicDetector extends Nanobus<{
           this.currentSongPosition = this.currentSongPausing ? position : 0
           this.currentSongRelativeTime = this.currentSongPausing
             ? 0
-            : Date.now() - position * 1000
+            : Date.now() - position * 1000 - offset * 1000
 
           this.emit("position", position)
           break
@@ -201,15 +204,16 @@ export class CloudmusicDetector extends Nanobus<{
             break
           }
 
-          const now = Date.now()
           const newRelative = now - this.currentSongPosition * 1000
           const newPosition = (now - this.currentSongRelativeTime) / 1000
 
           this.currentSongPausing = status === 2
-          this.currentSongPosition = this.currentSongPausing ? newPosition : 0
+          this.currentSongPosition = this.currentSongPausing
+            ? newPosition - offset
+            : 0
           this.currentSongRelativeTime = this.currentSongPausing
             ? 0
-            : newRelative
+            : newRelative - offset * 1000
 
           this.emit("status", !this.currentSongPausing)
           break
