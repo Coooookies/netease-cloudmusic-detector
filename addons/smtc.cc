@@ -129,29 +129,52 @@ SMTCMedia::~SMTCMedia() {
 }
 
 void SMTCMedia::UnregisterAllEvents() {
-  // Unregister session manager events
-  if (sessionManager != nullptr) {
-    if (sessionAddedToken.value != 0) {
-      sessionManager.SessionsChanged(sessionAddedToken);
-      sessionAddedToken = {};
+  try {
+    // Unregister session manager events
+    if (sessionManager != nullptr) {
+      if (sessionAddedToken.value != 0) {
+        sessionManager.SessionsChanged(sessionAddedToken);
+        sessionAddedToken = {};
+      }
+      
+      if (sessionRemovedToken.value != 0) {
+        sessionManager.SessionsChanged(sessionRemovedToken);
+        sessionRemovedToken = {};
+      }
     }
     
-    if (sessionRemovedToken.value != 0) {
-      sessionManager.SessionsChanged(sessionRemovedToken);
-      sessionRemovedToken = {};
+    // Unregister session events
+    std::lock_guard<std::mutex> lock(sessionsLock);
+    sessionEventTokens.clear();
+    
+    // Release thread-safe function references
+    if (tsfnSessionAdded) {
+      auto tsfn = std::move(tsfnSessionAdded);
+      tsfn.Release();
     }
+    
+    if (tsfnSessionRemoved) {
+      auto tsfn = std::move(tsfnSessionRemoved);
+      tsfn.Release();
+    }
+    
+    if (tsfnPlaybackStateChanged) {
+      auto tsfn = std::move(tsfnPlaybackStateChanged);
+      tsfn.Release();
+    }
+    
+    if (tsfnTimelinePropertiesChanged) {
+      auto tsfn = std::move(tsfnTimelinePropertiesChanged);
+      tsfn.Release();
+    }
+    
+    if (tsfnMediaPropertiesChanged) {
+      auto tsfn = std::move(tsfnMediaPropertiesChanged);
+      tsfn.Release();
+    }
+  } catch (...) {
+    // Silently catch any exceptions to prevent crashes during cleanup
   }
-  
-  // Unregister session events
-  std::lock_guard<std::mutex> lock(sessionsLock);
-  sessionEventTokens.clear();
-  
-  // Release thread-safe function references
-  if (tsfnSessionAdded) tsfnSessionAdded.Release();
-  if (tsfnSessionRemoved) tsfnSessionRemoved.Release();
-  if (tsfnPlaybackStateChanged) tsfnPlaybackStateChanged.Release();
-  if (tsfnTimelinePropertiesChanged) tsfnTimelinePropertiesChanged.Release();
-  if (tsfnMediaPropertiesChanged) tsfnMediaPropertiesChanged.Release();
 }
 
 Napi::Value SMTCMedia::On(const Napi::CallbackInfo& info) {
@@ -167,178 +190,146 @@ Napi::Value SMTCMedia::On(const Napi::CallbackInfo& info) {
   Napi::Function callback = info[1].As<Napi::Function>();
   
   try {
-    // Create thread-safe function
+    // Create thread-safe function with proper finalization
     Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(
       env,
       callback,
       "SMTC Callback",
       0,
       1,
-      [](Napi::Env) {}
+      [](Napi::Env) {} // Empty finalizer
     );
     
-    if (eventName == "sessionadded") {
-      // Store thread-safe function
-      tsfnSessionAdded = std::move(tsfn);
+    if (eventName == "sessionadded" || eventName == "sessionremoved") {
+      // For both session added and removed events, we use the same SessionsChanged event
+      // but handle them differently in the callback
       
-      // Register for session added events
-      sessionAddedToken = sessionManager.SessionsChanged([this](auto&& sender, auto&& args) {
+      // Release previous thread-safe functions if they exist
+      if (eventName == "sessionadded") {
+        if (tsfnSessionAdded) tsfnSessionAdded.Release();
+        tsfnSessionAdded = std::move(tsfn);
+      } else {
+        if (tsfnSessionRemoved) tsfnSessionRemoved.Release();
+        tsfnSessionRemoved = std::move(tsfn);
+      }
+      
+      // If we don't have any session change tokens yet, register for the event
+      if (sessionAddedToken.value == 0 && sessionRemovedToken.value == 0) {
+        // Store current session IDs for comparison
+        std::vector<std::wstring> previousSessionIds;
         auto sessions = sessionManager.GetSessions();
-        std::vector<std::wstring> currentSessionIds;
-        
-        // Get all current session IDs
         for (auto session : sessions) {
-          currentSessionIds.push_back(hstring_to_wstring(session.SourceAppUserModelId()));
-        }
-        
-        // Find new sessions
-        for (auto session : sessions) {
-          auto id = session.SourceAppUserModelId();
-          std::wstring appId(hstring_to_wstring(id));
+          std::wstring appId = hstring_to_wstring(session.SourceAppUserModelId());
+          previousSessionIds.push_back(appId);
           
-          std::lock_guard<std::mutex> lock(sessionsLock);
-          if (sessionEventTokens.find(appId) == sessionEventTokens.end()) {
-            // New session found, register for its events
-            RegisterSessionEvents(session);
-            
-            // Notify JavaScript
-            if (tsfnSessionAdded) {
-              tsfnSessionAdded.BlockingCall([id](Napi::Env env, Napi::Function jsCallback) {
-                jsCallback.Call({Napi::String::New(env, hstring_to_string(id))});
-              });
-            }
-          }
+          // Register events for this session
+          RegisterSessionEvents(session);
         }
-      });
-      
-      // Register events for existing sessions
-      auto sessions = sessionManager.GetSessions();
-      for (auto session : sessions) {
-        RegisterSessionEvents(session);
+        
+        // Register for session changes
+        auto token = sessionManager.SessionsChanged([this, previousSessionIds](auto&& sender, auto&& args) mutable {
+          // Make a local copy of the session manager to avoid race conditions
+          auto sessionMgr = this->sessionManager;
+          if (!sessionMgr) return;
+          
+          try {
+            // Get current sessions
+            auto sessions = sessionMgr.GetSessions();
+            std::vector<std::wstring> currentSessionIds;
+            
+            // Get all current session IDs
+            for (auto session : sessions) {
+              currentSessionIds.push_back(hstring_to_wstring(session.SourceAppUserModelId()));
+            }
+            
+            // Find new sessions (added)
+            for (auto session : sessions) {
+              auto id = session.SourceAppUserModelId();
+              std::wstring appId(hstring_to_wstring(id));
+              
+              // If this session ID wasn't in the previous list, it's new
+              if (std::find(previousSessionIds.begin(), previousSessionIds.end(), appId) == previousSessionIds.end()) {
+                // Register events for this session
+                RegisterSessionEvents(session);
+                
+                // Notify JavaScript about added session
+                if (tsfnSessionAdded) {
+                  std::string idCopy = hstring_to_string(id);
+                  tsfnSessionAdded.BlockingCall([idCopy](Napi::Env env, Napi::Function jsCallback) {
+                    Napi::HandleScope scope(env);
+                    jsCallback.Call({Napi::String::New(env, idCopy)});
+                  });
+                }
+              }
+            }
+            
+            // Find removed sessions
+            for (auto& prevId : previousSessionIds) {
+              // If this previous ID is not in the current list, it's been removed
+              if (std::find(currentSessionIds.begin(), currentSessionIds.end(), prevId) == currentSessionIds.end()) {
+                // Notify JavaScript about removed session
+                if (tsfnSessionRemoved) {
+                  std::string idCopy = wstring_to_string(prevId);
+                  tsfnSessionRemoved.BlockingCall([idCopy](Napi::Env env, Napi::Function jsCallback) {
+                    Napi::HandleScope scope(env);
+                    jsCallback.Call({Napi::String::New(env, idCopy)});
+                  });
+                }
+                
+                // Unregister events for this session
+                UnregisterSessionEvents(prevId);
+              }
+            }
+            
+            // Update previous session IDs for next comparison
+            previousSessionIds = currentSessionIds;
+          } catch (...) {
+            // Silently catch any exceptions to prevent crashes
+          }
+        });
+        
+        // Store the token - we'll use the same token for both added and removed events
+        sessionAddedToken = token;
+        sessionRemovedToken = token;
       }
     }
-    else if (eventName == "sessionremoved") {
-      // Store thread-safe function
-      tsfnSessionRemoved = std::move(tsfn);
-      
-      // Register for session removed events
-      sessionRemovedToken = sessionManager.SessionsChanged([this](auto&& sender, auto&& args) {
-        auto sessions = sessionManager.GetSessions();
-        std::vector<std::wstring> currentSessionIds;
-        
-        // Get current session IDs
-        for (auto session : sessions) {
-          currentSessionIds.push_back(hstring_to_wstring(session.SourceAppUserModelId()));
-        }
-        
-        // Check for removed sessions
-        std::vector<std::wstring> removedSessions;
-        {
-          std::lock_guard<std::mutex> lock(sessionsLock);
-          for (auto& [sessionId, tokens] : sessionEventTokens) {
-            // If the session is not in the current list, it's been removed
-            if (std::find(currentSessionIds.begin(), currentSessionIds.end(), sessionId) == currentSessionIds.end()) {
-              removedSessions.push_back(sessionId);
-            }
-          }
-          
-          // Unregister removed sessions and clean up tokens
-          for (auto& removedId : removedSessions) {
-            // Notify JavaScript
-            if (tsfnSessionRemoved) {
-              tsfnSessionRemoved.BlockingCall([removedId](Napi::Env env, Napi::Function jsCallback) {
-                jsCallback.Call({Napi::String::New(env, wstring_to_string(removedId))});
-              });
-            }
-            
-            // Unregister events
-            UnregisterSessionEvents(removedId);
-          }
-        }
-      });
-    }
     else if (eventName == "playbackstatechanged") {
+      // Release previous thread-safe function if it exists
+      if (tsfnPlaybackStateChanged) tsfnPlaybackStateChanged.Release();
+      
       // Store thread-safe function
       tsfnPlaybackStateChanged = std::move(tsfn);
       
       // Register for playback state changes on all current sessions
       auto sessions = sessionManager.GetSessions();
       for (auto session : sessions) {
-        auto id = session.SourceAppUserModelId();
-        std::wstring appId(hstring_to_wstring(id));
-        
-        // Check if we already have event tokens for this session
-        std::lock_guard<std::mutex> lock(sessionsLock);
-        if (sessionEventTokens.find(appId) == sessionEventTokens.end()) {
-          RegisterSessionEvents(session);
-        } else {
-          // Register playback info changed event
-          auto token = session.PlaybackInfoChanged([this, id](auto&& session, auto&& args) {
-            if (tsfnPlaybackStateChanged) {
-              tsfnPlaybackStateChanged.BlockingCall([id](Napi::Env env, Napi::Function jsCallback) {
-                jsCallback.Call({Napi::String::New(env, hstring_to_string(id))});
-              });
-            }
-          });
-          
-          sessionEventTokens[appId].push_back(token);
-        }
+        RegisterSessionEvents(session);
       }
     }
     else if (eventName == "timelinepropertieschanged") {
+      // Release previous thread-safe function if it exists
+      if (tsfnTimelinePropertiesChanged) tsfnTimelinePropertiesChanged.Release();
+      
       // Store thread-safe function
       tsfnTimelinePropertiesChanged = std::move(tsfn);
       
       // Register for timeline properties changes on all current sessions
       auto sessions = sessionManager.GetSessions();
       for (auto session : sessions) {
-        auto id = session.SourceAppUserModelId();
-        std::wstring appId(hstring_to_wstring(id));
-        
-        // Check if we already have event tokens for this session
-        std::lock_guard<std::mutex> lock(sessionsLock);
-        if (sessionEventTokens.find(appId) == sessionEventTokens.end()) {
-          RegisterSessionEvents(session);
-        } else {
-          // Register timeline properties changed event
-          auto token = session.TimelinePropertiesChanged([this, id](auto&& session, auto&& args) {
-            if (tsfnTimelinePropertiesChanged) {
-              tsfnTimelinePropertiesChanged.BlockingCall([id](Napi::Env env, Napi::Function jsCallback) {
-                jsCallback.Call({Napi::String::New(env, hstring_to_string(id))});
-              });
-            }
-          });
-          
-          sessionEventTokens[appId].push_back(token);
-        }
+        RegisterSessionEvents(session);
       }
     }
     else if (eventName == "mediapropertieschanged") {
+      // Release previous thread-safe function if it exists
+      if (tsfnMediaPropertiesChanged) tsfnMediaPropertiesChanged.Release();
+      
       // Store thread-safe function
       tsfnMediaPropertiesChanged = std::move(tsfn);
       
       // Register for media properties changes on all current sessions
       auto sessions = sessionManager.GetSessions();
       for (auto session : sessions) {
-        auto id = session.SourceAppUserModelId();
-        std::wstring appId(hstring_to_wstring(id));
-        
-        // Check if we already have event tokens for this session
-        std::lock_guard<std::mutex> lock(sessionsLock);
-        if (sessionEventTokens.find(appId) == sessionEventTokens.end()) {
-          RegisterSessionEvents(session);
-        } else {
-          // Register media properties changed event
-          auto token = session.MediaPropertiesChanged([this, id](auto&& session, auto&& args) {
-            if (tsfnMediaPropertiesChanged) {
-              tsfnMediaPropertiesChanged.BlockingCall([id](Napi::Env env, Napi::Function jsCallback) {
-                jsCallback.Call({Napi::String::New(env, hstring_to_string(id))});
-              });
-            }
-          });
-          
-          sessionEventTokens[appId].push_back(token);
-        }
+        RegisterSessionEvents(session);
       }
     }
     else {
@@ -369,27 +360,48 @@ Napi::Value SMTCMedia::Off(const Napi::CallbackInfo& info) {
   
   try {
     if (eventName == "sessionadded") {
-      if (sessionAddedToken.value != 0) {
+      // Release the thread-safe function
+      if (tsfnSessionAdded) {
+        auto tsfn = std::move(tsfnSessionAdded);
+        tsfn.Release();
+      }
+      
+      // Only unregister the token if sessionremoved is also not being used
+      if (sessionAddedToken.value != 0 && !tsfnSessionRemoved) {
         sessionManager.SessionsChanged(sessionAddedToken);
         sessionAddedToken = {};
       }
-      if (tsfnSessionAdded) tsfnSessionAdded.Release();
     }
     else if (eventName == "sessionremoved") {
-      if (sessionRemovedToken.value != 0) {
+      // Release the thread-safe function
+      if (tsfnSessionRemoved) {
+        auto tsfn = std::move(tsfnSessionRemoved);
+        tsfn.Release();
+      }
+      
+      // Only unregister the token if sessionadded is also not being used
+      if (sessionRemovedToken.value != 0 && !tsfnSessionAdded) {
         sessionManager.SessionsChanged(sessionRemovedToken);
         sessionRemovedToken = {};
       }
-      if (tsfnSessionRemoved) tsfnSessionRemoved.Release();
     }
     else if (eventName == "playbackstatechanged") {
-      if (tsfnPlaybackStateChanged) tsfnPlaybackStateChanged.Release();
+      if (tsfnPlaybackStateChanged) {
+        auto tsfn = std::move(tsfnPlaybackStateChanged);
+        tsfn.Release();
+      }
     }
     else if (eventName == "timelinepropertieschanged") {
-      if (tsfnTimelinePropertiesChanged) tsfnTimelinePropertiesChanged.Release();
+      if (tsfnTimelinePropertiesChanged) {
+        auto tsfn = std::move(tsfnTimelinePropertiesChanged);
+        tsfn.Release();
+      }
     }
     else if (eventName == "mediapropertieschanged") {
-      if (tsfnMediaPropertiesChanged) tsfnMediaPropertiesChanged.Release();
+      if (tsfnMediaPropertiesChanged) {
+        auto tsfn = std::move(tsfnMediaPropertiesChanged);
+        tsfn.Release();
+      }
     }
     else {
       Napi::Error::New(env, "Unknown event: " + eventName).ThrowAsJavaScriptException();
@@ -406,57 +418,99 @@ Napi::Value SMTCMedia::Off(const Napi::CallbackInfo& info) {
 }
 
 void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession const& session) {
-  auto id = session.SourceAppUserModelId();
-  std::wstring appId = hstring_to_wstring(id);
-  std::string appIdStr = hstring_to_string(id); // Convert to std::string for JavaScript
-  
-  std::lock_guard<std::mutex> lock(sessionsLock);
-  
-  // Skip if already registered
-  if (sessionEventTokens.find(appId) != sessionEventTokens.end()) {
-    return;
+  try {
+    auto id = session.SourceAppUserModelId();
+    std::wstring appId = hstring_to_wstring(id);
+    std::string appIdStr = hstring_to_string(id); // Convert to std::string for JavaScript
+    
+    std::lock_guard<std::mutex> lock(sessionsLock);
+    
+    // Skip if already registered
+    if (sessionEventTokens.find(appId) != sessionEventTokens.end()) {
+      return;
+    }
+    
+    std::vector<event_token> tokens;
+    
+    // Register for playback info changed if we have a listener
+    if (tsfnPlaybackStateChanged) {
+      // Create a copy of the string for the lambda to capture
+      std::string appIdCopy = appIdStr;
+      auto token = session.PlaybackInfoChanged([this, appIdCopy](auto&& session, auto&& args) {
+        try {
+          // Check if the callback is still valid
+          if (tsfnPlaybackStateChanged) {
+            // Use a local copy to avoid race conditions
+            auto tsfn = tsfnPlaybackStateChanged;
+            if (tsfn) {
+              tsfn.BlockingCall([appIdCopy](Napi::Env env, Napi::Function jsCallback) {
+                Napi::HandleScope scope(env);
+                jsCallback.Call({Napi::String::New(env, appIdCopy)});
+              });
+            }
+          }
+        } catch (...) {
+          // Silently catch any exceptions to prevent crashes
+        }
+      });
+      tokens.push_back(token);
+    }
+    
+    // Register for timeline properties changed if we have a listener
+    if (tsfnTimelinePropertiesChanged) {
+      // Create a copy of the string for the lambda to capture
+      std::string appIdCopy = appIdStr;
+      auto token = session.TimelinePropertiesChanged([this, appIdCopy](auto&& session, auto&& args) {
+        try {
+          // Check if the callback is still valid
+          if (tsfnTimelinePropertiesChanged) {
+            // Use a local copy to avoid race conditions
+            auto tsfn = tsfnTimelinePropertiesChanged;
+            if (tsfn) {
+              tsfn.BlockingCall([appIdCopy](Napi::Env env, Napi::Function jsCallback) {
+                Napi::HandleScope scope(env);
+                jsCallback.Call({Napi::String::New(env, appIdCopy)});
+              });
+            }
+          }
+        } catch (...) {
+          // Silently catch any exceptions to prevent crashes
+        }
+      });
+      tokens.push_back(token);
+    }
+    
+    // Register for media properties changed if we have a listener
+    if (tsfnMediaPropertiesChanged) {
+      // Create a copy of the string for the lambda to capture
+      std::string appIdCopy = appIdStr;
+      auto token = session.MediaPropertiesChanged([this, appIdCopy](auto&& session, auto&& args) {
+        try {
+          // Check if the callback is still valid
+          if (tsfnMediaPropertiesChanged) {
+            // Use a local copy to avoid race conditions
+            auto tsfn = tsfnMediaPropertiesChanged;
+            if (tsfn) {
+              tsfn.BlockingCall([appIdCopy](Napi::Env env, Napi::Function jsCallback) {
+                Napi::HandleScope scope(env);
+                jsCallback.Call({Napi::String::New(env, appIdCopy)});
+              });
+            }
+          }
+        } catch (...) {
+          // Silently catch any exceptions to prevent crashes
+        }
+      });
+      tokens.push_back(token);
+    }
+    
+    // Store tokens only if we have any
+    if (!tokens.empty()) {
+      sessionEventTokens[appId] = std::move(tokens);
+    }
+  } catch (...) {
+    // Silently catch any exceptions to prevent crashes
   }
-  
-  std::vector<event_token> tokens;
-  
-  // Register for playback info changed if we have a listener
-  if (tsfnPlaybackStateChanged) {
-    auto token = session.PlaybackInfoChanged([this, appIdStr](auto&& session, auto&& args) {
-      if (tsfnPlaybackStateChanged) {
-        tsfnPlaybackStateChanged.BlockingCall([appIdStr](Napi::Env env, Napi::Function jsCallback) {
-          jsCallback.Call({Napi::String::New(env, appIdStr)});
-        });
-      }
-    });
-    tokens.push_back(token);
-  }
-  
-  // Register for timeline properties changed if we have a listener
-  if (tsfnTimelinePropertiesChanged) {
-    auto token = session.TimelinePropertiesChanged([this, appIdStr](auto&& session, auto&& args) {
-      if (tsfnTimelinePropertiesChanged) {
-        tsfnTimelinePropertiesChanged.BlockingCall([appIdStr](Napi::Env env, Napi::Function jsCallback) {
-          jsCallback.Call({Napi::String::New(env, appIdStr)});
-        });
-      }
-    });
-    tokens.push_back(token);
-  }
-  
-  // Register for media properties changed if we have a listener
-  if (tsfnMediaPropertiesChanged) {
-    auto token = session.MediaPropertiesChanged([this, appIdStr](auto&& session, auto&& args) {
-      if (tsfnMediaPropertiesChanged) {
-        tsfnMediaPropertiesChanged.BlockingCall([appIdStr](Napi::Env env, Napi::Function jsCallback) {
-          jsCallback.Call({Napi::String::New(env, appIdStr)});
-        });
-      }
-    });
-    tokens.push_back(token);
-  }
-  
-  // Store tokens
-  sessionEventTokens[appId] = std::move(tokens);
 }
 
 void SMTCMedia::UnregisterSessionEvents(std::wstring const& sourceAppUserModelId) {
