@@ -202,8 +202,6 @@ function setupEventListeners() {
         console.error("Error in media properties changed handler:", error)
       }
     })
-
-    console.log("Event listeners set up successfully")
   } catch (error) {
     console.error("Error setting up event listeners:", error)
   }
@@ -226,30 +224,27 @@ function removeEventListeners() {
 }
 
 function main() {
-  // console.log("=== Current Media Session ===")
-  // const currentSession = getCurrentSession()
-  // if (currentSession) {
-  //   console.log(formatSessionInfo(currentSession))
-  // } else {
-  //   console.log("No active media session found")
-  // }
+  console.log("=== Current Media Session ===")
+  const currentSession = getCurrentSession()
+  if (currentSession) {
+    console.log(formatSessionInfo(currentSession))
+  } else {
+    console.log("No active media session found")
+  }
 
-  // console.log("\n=== All Media Sessions ===")
-  // const allSessions = getAllSessions()
-  // if (allSessions.length > 0) {
-  //   allSessions.forEach((session, index) => {
-  //     console.log(`\n--- Session ${index + 1} ---`)
-  //     console.log(formatSessionInfo(session))
-  //   })
-  // } else {
-  //   console.log("No media sessions found")
-  // }
+  console.log("\n=== All Media Sessions ===")
+  const allSessions = getAllSessions()
+  if (allSessions.length > 0) {
+    allSessions.forEach((session, index) => {
+      console.log(`\n--- Session ${index + 1} ---`)
+      console.log(formatSessionInfo(session))
+    })
+  } else {
+    console.log("No media sessions found")
+  }
 
-  // // Set up event listeners to monitor changes
-  // console.log("\n=== Setting up event listeners ===")
   setupEventListeners()
 
-  // Set up cleanup for when the program exits
   process.on("SIGINT", () => {
     console.log("\nRemoving event listeners and exiting...")
     removeEventListeners()

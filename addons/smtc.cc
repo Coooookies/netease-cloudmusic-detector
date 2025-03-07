@@ -1,4 +1,4 @@
-#include <napi.h>
+﻿#include <napi.h>
 #include <windows.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -287,6 +287,7 @@ Napi::Value SMTCMedia::On(const Napi::CallbackInfo &info)
               // If this session ID wasn't in the previous list, it's new
               if (std::find(previousSessionIds.begin(), previousSessionIds.end(), appId) == previousSessionIds.end()) {
                 // Register events for this session
+                
                 RegisterSessionEvents(session);
                 
                 // Notify JavaScript about added session
