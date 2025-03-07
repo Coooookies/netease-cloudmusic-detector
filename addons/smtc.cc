@@ -492,33 +492,53 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
 
     // Remove any existing tokens for this session
     auto existingTokens = sessionEventTokens.find(appId);
-    if (existingTokens != sessionEventTokens.end()) {
+    if (existingTokens != sessionEventTokens.end())
+    {
       // Attempt to unregister existing tokens
-      try {
+      try
+      {
         // We need to find the session with this ID
         auto sessions = sessionManager.GetSessions();
-        for (auto existingSession : sessions) {
-          if (hstring_to_wstring(existingSession.SourceAppUserModelId()) == appId) {
+        for (auto existingSession : sessions)
+        {
+          if (hstring_to_wstring(existingSession.SourceAppUserModelId()) == appId)
+          {
             // Unregister the events by their tokens
-            for (auto& token : existingTokens->second) {
+            for (auto &token : existingTokens->second)
+            {
               // We don't know which event this token belongs to, so we'll try all of them
-              try {
+              try
+              {
                 existingSession.PlaybackInfoChanged(token);
-              } catch (...) {}
-              
-              try {
+              }
+              catch (...)
+              {
+              }
+
+              try
+              {
                 existingSession.TimelinePropertiesChanged(token);
-              } catch (...) {}
-              
-              try {
+              }
+              catch (...)
+              {
+              }
+
+              try
+              {
                 existingSession.MediaPropertiesChanged(token);
-              } catch (...) {}
+              }
+              catch (...)
+              {
+              }
             }
             break;
           }
         }
-      } catch (...) {}
-      
+      }
+      catch (...)
+      {
+      }
+
       // Remove the tokens from our map
       sessionEventTokens.erase(existingTokens);
     }
@@ -527,12 +547,12 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
 
     // Always register for all event types, regardless of whether there's a listener or not
     // This ensures events are already registered when a listener is added later
-    
+
     // Register for playback info changed
     {
       std::string appIdCopy = appIdStr;
       auto token = session.PlaybackInfoChanged([this, appIdCopy](auto &&session, auto &&args)
-      {
+                                               {
         try {
           if (tsfnPlaybackStateChanged) {
             auto tsfn = tsfnPlaybackStateChanged;
@@ -543,8 +563,7 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
               });
             }
           }
-        } catch (...) {}
-      });
+        } catch (...) {} });
       tokens.push_back(token);
     }
 
@@ -552,7 +571,7 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
     {
       std::string appIdCopy = appIdStr;
       auto token = session.TimelinePropertiesChanged([this, appIdCopy](auto &&session, auto &&args)
-      {
+                                                     {
         try {
           if (tsfnTimelinePropertiesChanged) {
             auto tsfn = tsfnTimelinePropertiesChanged;
@@ -563,8 +582,7 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
               });
             }
           }
-        } catch (...) {}
-      });
+        } catch (...) {} });
       tokens.push_back(token);
     }
 
@@ -572,7 +590,7 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
     {
       std::string appIdCopy = appIdStr;
       auto token = session.MediaPropertiesChanged([this, appIdCopy](auto &&session, auto &&args)
-      {
+                                                  {
         try {
           if (tsfnMediaPropertiesChanged) {
             auto tsfn = tsfnMediaPropertiesChanged;
@@ -583,8 +601,7 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
               });
             }
           }
-        } catch (...) {}
-      });
+        } catch (...) {} });
       tokens.push_back(token);
     }
 
