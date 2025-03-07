@@ -3,7 +3,7 @@
     "target": "ES2021",
     "lib": ["ESNext"],
     "module": "NodeNext",
-    "rootDir": "./src",
+    "rootDir": ".",
     "moduleResolution": "NodeNext",
     "resolveJsonModule": true,
     "allowJs": true,
@@ -21,6 +21,6 @@
   "ts-node": {
     "files": true
   },
-  "includes": ["src/**/*"],
+  "includes": ["src/**/*", "addon/**/*"],
   "exclude": ["build/**/*", "scripts/**/*", "config/**/*"]
 }

@@ -11,3 +11,6 @@ dist-ssr
 tmp
 **/.tmp
 release
+addon/**/target
+addon/**/index.js
+addon/**/index.d.ts

@@ -1,37 +1,27 @@
-import { CloudmusicDetector } from "./cloudmusic-detector/index.js"
+import pkg from "../addon/smtc/index.js"
+const { SmtcMonitor } = pkg
 
-const detector = new CloudmusicDetector()
-const logger = () => {
-  if (!detector.status.playing) {
-    return
-  }
+const smtcMonitor = new SmtcMonitor()
+smtcMonitor.initialize()
 
-  console.log(
-    `Playing`,
-    `${`${Math.floor(detector.status.position / 60)}`.padStart(
-      2,
-      "0"
-    )}:${`${Math.round(detector.status.position % 60)}`.padStart(2, "0")}`,
-    `${Math.round((detector.status.position / detector.status.duration) * 10000) /
-      100}%`
-  )
-}
-
-detector.start().then(() => {
-  console.log(detector.status)
+smtcMonitor.onSessionAdded((session) => {
+  console.log("Session added:", session)
 })
 
-detector.on("play", (songId) => {
-  console.log("Song Id", songId)
-  console.log(detector.status)
+smtcMonitor.onSessionRemoved((session) => {
+  console.log("Session removed:", session)
 })
 
-detector.on("status", (playing) => {
-  console.log("Song Playing", playing)
+smtcMonitor.onMediaPropertiesChanged((session) => {
+  console.log("Media properties changed:", session)
 })
 
-detector.on("position", (position) => {
-  console.log("Song Position", position)
+smtcMonitor.onPlaybackInfoChanged((session) => {
+  console.log("Playback info changed:", session)
 })
 
-setInterval(logger, 100)
+smtcMonitor.onTimelinePropertiesChanged((session) => {
+  console.log("Timeline properties changed:", session)
+})
+
+console.log(smtcMonitor.getCurrentSession(), smtcMonitor.getAllSessions())
