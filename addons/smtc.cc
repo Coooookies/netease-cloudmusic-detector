@@ -257,7 +257,8 @@ Napi::Value SMTCMedia::On(const Napi::CallbackInfo &info)
           std::wstring appId = hstring_to_wstring(session.SourceAppUserModelId());
           previousSessionIds.push_back(appId);
 
-          // Register events for this session
+          // Register events for this session - make sure we register all possible events
+          // regardless of whether there's a listener or not
           RegisterSessionEvents(session);
         }
 
@@ -338,7 +339,6 @@ Napi::Value SMTCMedia::On(const Napi::CallbackInfo &info)
       tsfnPlaybackStateChanged = std::move(tsfn);
 
       // Register for playback state changes on all current sessions
-
       for (auto session : sessions)
       {
         RegisterSessionEvents(session);
@@ -490,25 +490,51 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
 
     std::lock_guard<std::mutex> lock(sessionsLock);
 
-    // Skip if already registered
-    if (sessionEventTokens.find(appId) != sessionEventTokens.end())
-    {
-      return;
+    // Remove any existing tokens for this session
+    auto existingTokens = sessionEventTokens.find(appId);
+    if (existingTokens != sessionEventTokens.end()) {
+      // Attempt to unregister existing tokens
+      try {
+        // We need to find the session with this ID
+        auto sessions = sessionManager.GetSessions();
+        for (auto existingSession : sessions) {
+          if (hstring_to_wstring(existingSession.SourceAppUserModelId()) == appId) {
+            // Unregister the events by their tokens
+            for (auto& token : existingTokens->second) {
+              // We don't know which event this token belongs to, so we'll try all of them
+              try {
+                existingSession.PlaybackInfoChanged(token);
+              } catch (...) {}
+              
+              try {
+                existingSession.TimelinePropertiesChanged(token);
+              } catch (...) {}
+              
+              try {
+                existingSession.MediaPropertiesChanged(token);
+              } catch (...) {}
+            }
+            break;
+          }
+        }
+      } catch (...) {}
+      
+      // Remove the tokens from our map
+      sessionEventTokens.erase(existingTokens);
     }
 
     std::vector<event_token> tokens;
 
-    // Register for playback info changed if we have a listener
-    if (tsfnPlaybackStateChanged)
+    // Always register for all event types, regardless of whether there's a listener or not
+    // This ensures events are already registered when a listener is added later
+    
+    // Register for playback info changed
     {
-      // Create a copy of the string for the lambda to capture
       std::string appIdCopy = appIdStr;
       auto token = session.PlaybackInfoChanged([this, appIdCopy](auto &&session, auto &&args)
-                                               {
+      {
         try {
-          // Check if the callback is still valid
           if (tsfnPlaybackStateChanged) {
-            // Use a local copy to avoid race conditions
             auto tsfn = tsfnPlaybackStateChanged;
             if (tsfn) {
               tsfn.BlockingCall([appIdCopy](Napi::Env env, Napi::Function jsCallback) {
@@ -517,23 +543,18 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
               });
             }
           }
-        } catch (...) {
-          // Silently catch any exceptions to prevent crashes
-        } });
+        } catch (...) {}
+      });
       tokens.push_back(token);
     }
 
-    // Register for timeline properties changed if we have a listener
-    if (tsfnTimelinePropertiesChanged)
+    // Register for timeline properties changed
     {
-      // Create a copy of the string for the lambda to capture
       std::string appIdCopy = appIdStr;
       auto token = session.TimelinePropertiesChanged([this, appIdCopy](auto &&session, auto &&args)
-                                                     {
+      {
         try {
-          // Check if the callback is still valid
           if (tsfnTimelinePropertiesChanged) {
-            // Use a local copy to avoid race conditions
             auto tsfn = tsfnTimelinePropertiesChanged;
             if (tsfn) {
               tsfn.BlockingCall([appIdCopy](Napi::Env env, Napi::Function jsCallback) {
@@ -542,23 +563,18 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
               });
             }
           }
-        } catch (...) {
-          // Silently catch any exceptions to prevent crashes
-        } });
+        } catch (...) {}
+      });
       tokens.push_back(token);
     }
 
-    // Register for media properties changed if we have a listener
-    if (tsfnMediaPropertiesChanged)
+    // Register for media properties changed
     {
-      // Create a copy of the string for the lambda to capture
       std::string appIdCopy = appIdStr;
       auto token = session.MediaPropertiesChanged([this, appIdCopy](auto &&session, auto &&args)
-                                                  {
+      {
         try {
-          // Check if the callback is still valid
           if (tsfnMediaPropertiesChanged) {
-            // Use a local copy to avoid race conditions
             auto tsfn = tsfnMediaPropertiesChanged;
             if (tsfn) {
               tsfn.BlockingCall([appIdCopy](Napi::Env env, Napi::Function jsCallback) {
@@ -567,17 +583,13 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
               });
             }
           }
-        } catch (...) {
-          // Silently catch any exceptions to prevent crashes
-        } });
+        } catch (...) {}
+      });
       tokens.push_back(token);
     }
 
-    // Store tokens only if we have any
-    if (!tokens.empty())
-    {
-      sessionEventTokens[appId] = std::move(tokens);
-    }
+    // Store the tokens
+    sessionEventTokens[appId] = std::move(tokens);
   }
   catch (...)
   {
@@ -606,6 +618,8 @@ Napi::Value SMTCMedia::GetSessions(const Napi::CallbackInfo &info)
     uint32_t i = 0;
     for (auto session : sessions)
     {
+      // 确保为所有会话注册事件
+      RegisterSessionEvents(session);
       result.Set(i++, CreateSessionObject(env, session));
     }
 
