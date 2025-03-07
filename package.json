@@ -6,6 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc",
+    "build:addon": "node-gyp rebuild",
+    "install": "node-gyp rebuild",
     "start": "node --env-file=.env ./build/index.js",
     "start-bun": "bun src/index.ts",
     "dev": "node --env-file=.env --watch --import ./scripts/register.js src/index.ts",
@@ -17,16 +19,19 @@
   "devDependencies": {
     "@types/bun": "^1.1.9",
     "@types/node": "^22.5.0",
+    "node-gyp": "^10.0.1",
     "typescript": "^5.5.4"
   },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "better-sqlite3": "^11.8.1",
     "nanobus": "^4.5.0",
+    "node-addon-api": "^7.1.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.17.0"
   },
   "engines": {
     "node": ">=20.6.0"
-  }
+  },
+  "gypfile": true
 }
