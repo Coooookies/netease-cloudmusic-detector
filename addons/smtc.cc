@@ -112,56 +112,57 @@ private:
   void Cleanup(Napi::Env env); // 带环境参数的版本
 };
 
-// 类外实现静态成员变量
 Napi::FunctionReference SMTCMedia::constructor;
 
-// 实现 Init 静态方法
-Napi::Object SMTCMedia::Init(Napi::Env env, Napi::Object exports) {
+Napi::Object SMTCMedia::Init(Napi::Env env, Napi::Object exports)
+{
   Napi::HandleScope scope(env);
 
   Napi::Function func = DefineClass(env, "SMTCMedia", {
-    // 注册类的实例方法
-    InstanceMethod("getSessions", &SMTCMedia::GetSessions),
-    InstanceMethod("getCurrentSession", &SMTCMedia::GetCurrentSession),
-    InstanceMethod("getSessionInfo", &SMTCMedia::GetSessionInfo),
-    InstanceMethod("on", &SMTCMedia::On),
-    InstanceMethod("off", &SMTCMedia::Off),
-  });
+                                                          // 注册类的实例方法
+                                                          InstanceMethod("getSessions", &SMTCMedia::GetSessions),
+                                                          InstanceMethod("getCurrentSession", &SMTCMedia::GetCurrentSession),
+                                                          InstanceMethod("getSessionInfo", &SMTCMedia::GetSessionInfo),
+                                                          InstanceMethod("on", &SMTCMedia::On),
+                                                          InstanceMethod("off", &SMTCMedia::Off),
+                                                      });
 
-  // 创建构造函数引用
   constructor = Napi::Persistent(func);
   constructor.SuppressDestruct();
 
-  // 导出类
+  // 导出
   exports.Set("SMTCMedia", func);
   return exports;
 }
 
-// 构造函数实现
-SMTCMedia::SMTCMedia(const Napi::CallbackInfo &info) : Napi::ObjectWrap<SMTCMedia>(info) {
+SMTCMedia::SMTCMedia(const Napi::CallbackInfo &info) : Napi::ObjectWrap<SMTCMedia>(info)
+{
   Napi::Env env = info.Env();
   Napi::HandleScope scope(env);
 
-  // 初始化 WinRT
   winrt::init_apartment();
 
-  // 初始化会话管理器
-  try {
+  try
+  {
     auto sessionManagerTask = GlobalSystemMediaTransportControlsSessionManager::RequestAsync();
     sessionManager = sessionManagerTask.get();
-    
-    if (!sessionManager) {
+
+    if (!sessionManager)
+    {
       Napi::Error::New(env, "Failed to initialize the Media Session Manager").ThrowAsJavaScriptException();
       return;
     }
-  } catch (const std::exception &e) {
+  }
+  catch (const std::exception &e)
+  {
     ThrowJSException(env, "Constructor", e);
-  } catch (const winrt::hresult_error &e) {
+  }
+  catch (const winrt::hresult_error &e)
+  {
     ThrowJSException(env, "Constructor", e);
   }
 }
 
-// 2. 添加无参数版本的 Cleanup 实现
 void SMTCMedia::Cleanup()
 {
   // Clean up all event callbacks
@@ -193,7 +194,6 @@ void SMTCMedia::Cleanup()
   winrt::uninit_apartment();
 }
 
-// 3. 保留原有的带参数版本的 Cleanup 实现
 void SMTCMedia::Cleanup(Napi::Env env)
 {
   // Clean up all event callbacks
