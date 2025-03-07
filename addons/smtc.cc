@@ -35,6 +35,23 @@ inline std::string wstring_to_string(const std::wstring &wstr)
   return str;
 }
 
+// Standardized error handling
+inline void ThrowJSException(Napi::Env env, const char *source, const std::exception &e)
+{
+  std::string message = std::string(source) + ": " + e.what();
+  Napi::Error::New(env, message).ThrowAsJavaScriptException();
+}
+
+inline void ThrowJSException(Napi::Env env, const char *source, const winrt::hresult_error &e)
+{
+  std::string message = std::string(source) + ": " +
+                        winrt::to_string(e.message()) +
+                        " (HRESULT: 0x" +
+                        std::to_string(static_cast<uint32_t>(e.code())) +
+                        ")";
+  Napi::Error::New(env, message).ThrowAsJavaScriptException();
+}
+
 class SMTCMedia : public Napi::ObjectWrap<SMTCMedia>
 {
 public:
@@ -54,19 +71,22 @@ private:
   std::mutex sessionsLock;
   std::map<std::wstring, std::vector<event_token>> sessionEventTokens;
 
-  // Callback references
-  Napi::ThreadSafeFunction tsfnSessionAdded;
-  Napi::ThreadSafeFunction tsfnSessionRemoved;
-  Napi::ThreadSafeFunction tsfnPlaybackStateChanged;
-  Napi::ThreadSafeFunction tsfnTimelinePropertiesChanged;
-  Napi::ThreadSafeFunction tsfnMediaPropertiesChanged;
+  // Event callback management
+  struct CallbackData
+  {
+    Napi::ThreadSafeFunction tsfn;
+    bool active;
+  };
+
+  std::map<std::string, CallbackData> eventCallbacks;
+  std::mutex callbacksLock;
 
   // Methods exposed to JavaScript
   Napi::Value GetSessions(const Napi::CallbackInfo &info);
   Napi::Value GetCurrentSession(const Napi::CallbackInfo &info);
   Napi::Value GetSessionInfo(const Napi::CallbackInfo &info);
 
-  // New event listener methods
+  // Event listener methods
   Napi::Value On(const Napi::CallbackInfo &info);
   Napi::Value Off(const Napi::CallbackInfo &info);
 
@@ -80,58 +100,88 @@ private:
   void RegisterSessionEvents(GlobalSystemMediaTransportControlsSession const &session);
   void UnregisterSessionEvents(std::wstring const &sourceAppUserModelId);
   void UnregisterAllEvents();
+
+  // Helper methods for event handling
+  bool RegisterEventListener(const std::string &eventName, Napi::Function callback, Napi::Env env);
+  Napi::ThreadSafeFunction GetEventCallback(const std::string &eventName);
+  void InvokeCallback(const std::string &eventName, const std::string &appId);
+  bool Initialize(Napi::Env env);
+
+  // 将 Cleanup 拆分为两个版本
+  void Cleanup();              // 无参数版本，供析构函数使用
+  void Cleanup(Napi::Env env); // 带环境参数的版本
 };
 
+// 类外实现静态成员变量
 Napi::FunctionReference SMTCMedia::constructor;
 
-Napi::Object SMTCMedia::Init(Napi::Env env, Napi::Object exports)
-{
+// 实现 Init 静态方法
+Napi::Object SMTCMedia::Init(Napi::Env env, Napi::Object exports) {
   Napi::HandleScope scope(env);
 
-  Napi::Function func =
-      DefineClass(
-          env,
-          "SMTCMedia",
-          {
-              InstanceMethod("getSessions", &SMTCMedia::GetSessions),
-              InstanceMethod("getCurrentSession", &SMTCMedia::GetCurrentSession),
-              InstanceMethod("getSessionInfo", &SMTCMedia::GetSessionInfo),
-              InstanceMethod("on", &SMTCMedia::On),
-              InstanceMethod("off", &SMTCMedia::Off),
-          });
+  Napi::Function func = DefineClass(env, "SMTCMedia", {
+    // 注册类的实例方法
+    InstanceMethod("getSessions", &SMTCMedia::GetSessions),
+    InstanceMethod("getCurrentSession", &SMTCMedia::GetCurrentSession),
+    InstanceMethod("getSessionInfo", &SMTCMedia::GetSessionInfo),
+    InstanceMethod("on", &SMTCMedia::On),
+    InstanceMethod("off", &SMTCMedia::Off),
+  });
 
+  // 创建构造函数引用
   constructor = Napi::Persistent(func);
   constructor.SuppressDestruct();
+
+  // 导出类
   exports.Set("SMTCMedia", func);
   return exports;
 }
 
-SMTCMedia::SMTCMedia(const Napi::CallbackInfo &info)
-    : Napi::ObjectWrap<SMTCMedia>(info)
-{
+// 构造函数实现
+SMTCMedia::SMTCMedia(const Napi::CallbackInfo &info) : Napi::ObjectWrap<SMTCMedia>(info) {
   Napi::Env env = info.Env();
   Napi::HandleScope scope(env);
 
-  try
-  {
-    // Initialize WinRT
-    winrt::init_apartment();
+  // 初始化 WinRT
+  winrt::init_apartment();
 
-    // Get the session manager
-    sessionManager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
-  }
-  catch (const std::exception &e)
-  {
-    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
-  }
-  catch (const winrt::hresult_error &e)
-  {
-    Napi::Error::New(env, winrt::to_string(e.message())).ThrowAsJavaScriptException();
+  // 初始化会话管理器
+  try {
+    auto sessionManagerTask = GlobalSystemMediaTransportControlsSessionManager::RequestAsync();
+    sessionManager = sessionManagerTask.get();
+    
+    if (!sessionManager) {
+      Napi::Error::New(env, "Failed to initialize the Media Session Manager").ThrowAsJavaScriptException();
+      return;
+    }
+  } catch (const std::exception &e) {
+    ThrowJSException(env, "Constructor", e);
+  } catch (const winrt::hresult_error &e) {
+    ThrowJSException(env, "Constructor", e);
   }
 }
 
-SMTCMedia::~SMTCMedia()
+// 2. 添加无参数版本的 Cleanup 实现
+void SMTCMedia::Cleanup()
 {
+  // Clean up all event callbacks
+  {
+    std::unique_lock<std::mutex> lock(callbacksLock);
+    for (auto &pair : eventCallbacks)
+    {
+      if (pair.second.active && pair.second.tsfn)
+      {
+        auto tsfn = std::move(pair.second.tsfn);
+        pair.second.active = false;
+
+        lock.unlock();
+        tsfn.Release();
+        lock.lock();
+      }
+    }
+    eventCallbacks.clear();
+  }
+
   // Clean up event listeners
   UnregisterAllEvents();
 
@@ -141,6 +191,117 @@ SMTCMedia::~SMTCMedia()
     sessionManager = nullptr;
   }
   winrt::uninit_apartment();
+}
+
+// 3. 保留原有的带参数版本的 Cleanup 实现
+void SMTCMedia::Cleanup(Napi::Env env)
+{
+  // Clean up all event callbacks
+  {
+    std::unique_lock<std::mutex> lock(callbacksLock);
+    for (auto &pair : eventCallbacks)
+    {
+      if (pair.second.active && pair.second.tsfn)
+      {
+        auto tsfn = std::move(pair.second.tsfn);
+        pair.second.active = false;
+
+        lock.unlock();
+        tsfn.Release();
+        lock.lock();
+      }
+    }
+    eventCallbacks.clear();
+  }
+
+  // Clean up event listeners
+  UnregisterAllEvents();
+
+  // Clean up WinRT
+  if (sessionManager != nullptr)
+  {
+    sessionManager = nullptr;
+  }
+  winrt::uninit_apartment();
+}
+
+SMTCMedia::~SMTCMedia()
+{
+  try
+  {
+    // 不传递 env 参数，修改 Cleanup 方法接受可选的 env 参数
+    Cleanup(); // 删除 Napi::Env() 参数
+  }
+  catch (...)
+  {
+    // Destructor should not throw
+  }
+}
+
+Napi::ThreadSafeFunction SMTCMedia::GetEventCallback(const std::string &eventName)
+{
+  std::lock_guard<std::mutex> lock(callbacksLock);
+  auto it = eventCallbacks.find(eventName);
+  if (it != eventCallbacks.end() && it->second.active)
+  {
+    return it->second.tsfn;
+  }
+  return Napi::ThreadSafeFunction();
+}
+
+void SMTCMedia::InvokeCallback(const std::string &eventName, const std::string &appId)
+{
+  auto tsfn = GetEventCallback(eventName);
+  if (!tsfn)
+    return;
+
+  // Copy data for thread safety
+  std::string eventNameCopy = eventName;
+  std::string appIdCopy = appId;
+
+  // Use NonBlockingCall to avoid blocking WinRT thread
+  tsfn.NonBlockingCall(
+      [eventNameCopy, appIdCopy](Napi::Env env, Napi::Function jsCallback)
+      {
+        // Execute in JavaScript thread
+        Napi::HandleScope scope(env);
+        jsCallback.Call({Napi::String::New(env, appIdCopy)});
+      });
+}
+
+bool SMTCMedia::RegisterEventListener(const std::string &eventName, Napi::Function callback, Napi::Env env)
+{
+  std::unique_lock<std::mutex> lock(callbacksLock);
+
+  // 释放现有回调（如果存在）
+  auto it = eventCallbacks.find(eventName);
+  if (it != eventCallbacks.end())
+  {
+    if (it->second.active && it->second.tsfn)
+    {
+      auto tsfn = std::move(it->second.tsfn);
+      it->second.active = false;
+      // 在外面释放
+      lock.unlock();
+      tsfn.Release();
+      lock.lock();
+    }
+  }
+
+  // 创建新的线程安全函数
+  auto tsfn = Napi::ThreadSafeFunction::New(
+      env,
+      callback,
+      "SMTC " + eventName,
+      0,
+      1,
+      [](Napi::Env) {} // 空的终结器
+  );
+
+  // 存储回调数据
+  eventCallbacks[eventName] = {std::move(tsfn), true};
+
+  return true;
 }
 
 void SMTCMedia::UnregisterAllEvents()
@@ -167,35 +328,22 @@ void SMTCMedia::UnregisterAllEvents()
     std::lock_guard<std::mutex> lock(sessionsLock);
     sessionEventTokens.clear();
 
-    // Release thread-safe function references
-    if (tsfnSessionAdded)
+    // Release all callbacks
     {
-      auto tsfn = std::move(tsfnSessionAdded);
-      tsfn.Release();
-    }
-
-    if (tsfnSessionRemoved)
-    {
-      auto tsfn = std::move(tsfnSessionRemoved);
-      tsfn.Release();
-    }
-
-    if (tsfnPlaybackStateChanged)
-    {
-      auto tsfn = std::move(tsfnPlaybackStateChanged);
-      tsfn.Release();
-    }
-
-    if (tsfnTimelinePropertiesChanged)
-    {
-      auto tsfn = std::move(tsfnTimelinePropertiesChanged);
-      tsfn.Release();
-    }
-
-    if (tsfnMediaPropertiesChanged)
-    {
-      auto tsfn = std::move(tsfnMediaPropertiesChanged);
-      tsfn.Release();
+      std::unique_lock<std::mutex> cbLock(callbacksLock);
+      for (auto &pair : eventCallbacks)
+      {
+        if (pair.second.active && pair.second.tsfn)
+        {
+          auto tsfn = std::move(pair.second.tsfn);
+          pair.second.active = false;
+          // Release outside the lock
+          cbLock.unlock();
+          tsfn.Release();
+          cbLock.lock();
+        }
+      }
+      eventCallbacks.clear();
     }
   }
   catch (...)
@@ -220,37 +368,17 @@ Napi::Value SMTCMedia::On(const Napi::CallbackInfo &info)
 
   try
   {
-    // Create thread-safe function with proper finalization
-    Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(
-        env,
-        callback,
-        "SMTC Callback",
-        0,
-        1,
-        [](Napi::Env) {} // Empty finalizer
-    );
+    // Register the event listener
+    if (!RegisterEventListener(eventName, callback, env))
+    {
+      Napi::Error::New(env, "Failed to register event listener").ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
 
     auto sessions = sessionManager.GetSessions();
 
     if (eventName == "sessionadded" || eventName == "sessionremoved")
     {
-      // For both session added and removed events, we use the same SessionsChanged event
-      // but handle them differently in the callback
-
-      // Release previous thread-safe functions if they exist
-      if (eventName == "sessionadded")
-      {
-        if (tsfnSessionAdded)
-          tsfnSessionAdded.Release();
-        tsfnSessionAdded = std::move(tsfn);
-      }
-      else
-      {
-        if (tsfnSessionRemoved)
-          tsfnSessionRemoved.Release();
-        tsfnSessionRemoved = std::move(tsfn);
-      }
-
       // If we don't have any session change tokens yet, register for the event
       if (sessionAddedToken.value == 0 && sessionRemovedToken.value == 0)
       {
@@ -261,12 +389,11 @@ Napi::Value SMTCMedia::On(const Napi::CallbackInfo &info)
           std::wstring appId = hstring_to_wstring(session.SourceAppUserModelId());
           previousSessionIds.push_back(appId);
 
-          // Register events for this session - make sure we register all possible events
-          // regardless of whether there's a listener or not
+          // Register events for this session
           RegisterSessionEvents(session);
         }
 
-        // Register for session changes
+        // Register for session changes with proper thread safety
         auto token = sessionManager.SessionsChanged([this, previousSessionIds](auto &&sender, auto &&args) mutable
                                                     {
           // Make a local copy of the session manager to avoid race conditions
@@ -291,17 +418,10 @@ Napi::Value SMTCMedia::On(const Napi::CallbackInfo &info)
               // If this session ID wasn't in the previous list, it's new
               if (std::find(previousSessionIds.begin(), previousSessionIds.end(), appId) == previousSessionIds.end()) {
                 // Register events for this session
-                
                 RegisterSessionEvents(session);
                 
-                // Notify JavaScript about added session
-                if (tsfnSessionAdded) {
-                  std::string idCopy = hstring_to_string(id);
-                  tsfnSessionAdded.BlockingCall([idCopy](Napi::Env env, Napi::Function jsCallback) {
-                    Napi::HandleScope scope(env);
-                    jsCallback.Call({Napi::String::New(env, idCopy)});
-                  });
-                }
+                // Notify JavaScript about added session using the safe invoke method
+                InvokeCallback("sessionadded", hstring_to_string(id));
               }
             }
             
@@ -309,14 +429,8 @@ Napi::Value SMTCMedia::On(const Napi::CallbackInfo &info)
             for (auto& prevId : previousSessionIds) {
               // If this previous ID is not in the current list, it's been removed
               if (std::find(currentSessionIds.begin(), currentSessionIds.end(), prevId) == currentSessionIds.end()) {
-                // Notify JavaScript about removed session
-                if (tsfnSessionRemoved) {
-                  std::string idCopy = wstring_to_string(prevId);
-                  tsfnSessionRemoved.BlockingCall([idCopy](Napi::Env env, Napi::Function jsCallback) {
-                    Napi::HandleScope scope(env);
-                    jsCallback.Call({Napi::String::New(env, idCopy)});
-                  });
-                }
+                // Notify JavaScript about removed session using the safe invoke method
+                InvokeCallback("sessionremoved", wstring_to_string(prevId));
                 
                 // Unregister events for this session
                 UnregisterSessionEvents(prevId);
@@ -329,51 +443,16 @@ Napi::Value SMTCMedia::On(const Napi::CallbackInfo &info)
             // Silently catch any exceptions to prevent crashes
           } });
 
-        // Store the token - we'll use the same token for both added and removed events
+        // Store the token for both event types
         sessionAddedToken = token;
         sessionRemovedToken = token;
       }
     }
-    else if (eventName == "playbackstatechanged")
+    else if (eventName == "playbackstatechanged" ||
+             eventName == "timelinepropertieschanged" ||
+             eventName == "mediapropertieschanged")
     {
-      // Release previous thread-safe function if it exists
-      if (tsfnPlaybackStateChanged)
-        tsfnPlaybackStateChanged.Release();
-
-      // Store thread-safe function
-      tsfnPlaybackStateChanged = std::move(tsfn);
-
-      // Register for playback state changes on all current sessions
-      for (auto session : sessions)
-      {
-        RegisterSessionEvents(session);
-      }
-    }
-    else if (eventName == "timelinepropertieschanged")
-    {
-      // Release previous thread-safe function if it exists
-      if (tsfnTimelinePropertiesChanged)
-        tsfnTimelinePropertiesChanged.Release();
-
-      // Store thread-safe function
-      tsfnTimelinePropertiesChanged = std::move(tsfn);
-
-      // Register for timeline properties changes on all current sessions
-      for (auto session : sessions)
-      {
-        RegisterSessionEvents(session);
-      }
-    }
-    else if (eventName == "mediapropertieschanged")
-    {
-      // Release previous thread-safe function if it exists
-      if (tsfnMediaPropertiesChanged)
-        tsfnMediaPropertiesChanged.Release();
-
-      // Store thread-safe function
-      tsfnMediaPropertiesChanged = std::move(tsfn);
-
-      // Register for media properties changes on all current sessions
+      // Register for events on all current sessions
       for (auto session : sessions)
       {
         RegisterSessionEvents(session);
@@ -387,11 +466,11 @@ Napi::Value SMTCMedia::On(const Napi::CallbackInfo &info)
   }
   catch (const std::exception &e)
   {
-    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    ThrowJSException(env, "On", e);
   }
   catch (const winrt::hresult_error &e)
   {
-    Napi::Error::New(env, winrt::to_string(e.message())).ThrowAsJavaScriptException();
+    ThrowJSException(env, "On", e);
   }
 
   return env.Undefined();
@@ -412,74 +491,88 @@ Napi::Value SMTCMedia::Off(const Napi::CallbackInfo &info)
 
   try
   {
-    if (eventName == "sessionadded")
+    // 使用 unique_lock 替代 lock_guard，这样可以临时解锁
+    std::unique_lock<std::mutex> lock(callbacksLock);
+    auto it = eventCallbacks.find(eventName);
+    if (it != eventCallbacks.end() && it->second.active)
     {
-      // Release the thread-safe function
-      if (tsfnSessionAdded)
+      auto tsfn = std::move(it->second.tsfn);
+      it->second.active = false;
+      eventCallbacks.erase(it);
+
+      // 临时解锁，然后调用可能阻塞的方法
+      lock.unlock();
+      tsfn.Release();
+      lock.lock();
+    }
+
+    // 处理特殊的会话事件...
+    if (eventName == "sessionadded" || eventName == "sessionremoved")
+    {
+      bool hasSessionAddedListener = false;
+      bool hasSessionRemovedListener = false;
+
+      // 检查是否还有这些事件的监听器
+      for (const auto &pair : eventCallbacks)
       {
-        auto tsfn = std::move(tsfnSessionAdded);
-        tsfn.Release();
+        if (pair.first == "sessionadded" && pair.second.active)
+        {
+          hasSessionAddedListener = true;
+        }
+        else if (pair.first == "sessionremoved" && pair.second.active)
+        {
+          hasSessionRemovedListener = true;
+        }
       }
 
-      // Only unregister the token if sessionremoved is also not being used
-      if (sessionAddedToken.value != 0 && !tsfnSessionRemoved)
+      // 如果两种事件都没有监听器，注销令牌
+      if (!hasSessionAddedListener && !hasSessionRemovedListener)
       {
-        sessionManager.SessionsChanged(sessionAddedToken);
-        sessionAddedToken = {};
-      }
-    }
-    else if (eventName == "sessionremoved")
-    {
-      // Release the thread-safe function
-      if (tsfnSessionRemoved)
-      {
-        auto tsfn = std::move(tsfnSessionRemoved);
-        tsfn.Release();
-      }
+        if (sessionAddedToken.value != 0)
+        {
+          // 临时解锁后调用 WinRT API
+          lock.unlock();
+          sessionManager.SessionsChanged(sessionAddedToken);
+          lock.lock();
+          sessionAddedToken = {};
+        }
 
-      // Only unregister the token if sessionadded is also not being used
-      if (sessionRemovedToken.value != 0 && !tsfnSessionAdded)
-      {
-        sessionManager.SessionsChanged(sessionRemovedToken);
-        sessionRemovedToken = {};
+        if (sessionRemovedToken.value != 0)
+        {
+          // 临时解锁后调用 WinRT API
+          lock.unlock();
+          sessionManager.SessionsChanged(sessionRemovedToken);
+          lock.lock();
+          sessionRemovedToken = {};
+        }
       }
     }
-    else if (eventName == "playbackstatechanged")
+
+    // 检查是否需要注销任何事件处理程序
+    bool hasAnyEventListeners = false;
+    for (const auto &pair : eventCallbacks)
     {
-      if (tsfnPlaybackStateChanged)
+      if (pair.second.active)
       {
-        auto tsfn = std::move(tsfnPlaybackStateChanged);
-        tsfn.Release();
+        hasAnyEventListeners = true;
+        break;
       }
     }
-    else if (eventName == "timelinepropertieschanged")
+
+    // 如果没有更多事件监听器，注销所有事件处理程序
+    if (!hasAnyEventListeners)
     {
-      if (tsfnTimelinePropertiesChanged)
-      {
-        auto tsfn = std::move(tsfnTimelinePropertiesChanged);
-        tsfn.Release();
-      }
-    }
-    else if (eventName == "mediapropertieschanged")
-    {
-      if (tsfnMediaPropertiesChanged)
-      {
-        auto tsfn = std::move(tsfnMediaPropertiesChanged);
-        tsfn.Release();
-      }
-    }
-    else
-    {
-      Napi::Error::New(env, "Unknown event: " + eventName).ThrowAsJavaScriptException();
+      lock.unlock();
+      UnregisterAllEvents();
     }
   }
   catch (const std::exception &e)
   {
-    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    ThrowJSException(env, "Off", e);
   }
   catch (const winrt::hresult_error &e)
   {
-    Napi::Error::New(env, winrt::to_string(e.message())).ThrowAsJavaScriptException();
+    ThrowJSException(env, "Off", e);
   }
 
   return env.Undefined();
@@ -491,7 +584,7 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
   {
     auto id = session.SourceAppUserModelId();
     std::wstring appId = hstring_to_wstring(id);
-    std::string appIdStr = hstring_to_string(id); // Convert to std::string for JavaScript
+    std::string appIdStr = hstring_to_string(id);
 
     std::lock_guard<std::mutex> lock(sessionsLock);
 
@@ -499,19 +592,18 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
     auto existingTokens = sessionEventTokens.find(appId);
     if (existingTokens != sessionEventTokens.end())
     {
-      // Attempt to unregister existing tokens
+      // Try to cleanly unregister existing event handlers
       try
       {
-        // We need to find the session with this ID
         auto sessions = sessionManager.GetSessions();
         for (auto existingSession : sessions)
         {
           if (hstring_to_wstring(existingSession.SourceAppUserModelId()) == appId)
           {
-            // Unregister the events by their tokens
+            // Try to unregister each token
             for (auto &token : existingTokens->second)
             {
-              // We don't know which event this token belongs to, so we'll try all of them
+              // Try each event type
               try
               {
                 existingSession.PlaybackInfoChanged(token);
@@ -519,7 +611,6 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
               catch (...)
               {
               }
-
               try
               {
                 existingSession.TimelinePropertiesChanged(token);
@@ -527,7 +618,6 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
               catch (...)
               {
               }
-
               try
               {
                 existingSession.MediaPropertiesChanged(token);
@@ -544,86 +634,48 @@ void SMTCMedia::RegisterSessionEvents(GlobalSystemMediaTransportControlsSession 
       {
       }
 
-      // Remove the tokens from our map
+      // Remove the tokens
       sessionEventTokens.erase(existingTokens);
     }
 
     std::vector<event_token> tokens;
 
-    // Always register for all event types, regardless of whether there's a listener or not
-    // This ensures events are already registered when a listener is added later
+    // Register for playback info changed with proper thread-safety
+    auto playbackToken = session.PlaybackInfoChanged(
+        [this, appIdStr](auto &&, auto &&)
+        {
+          InvokeCallback("playbackstatechanged", appIdStr);
+        });
+    tokens.push_back(playbackToken);
 
-    // Register for playback info changed
-    {
-      std::string appIdCopy = appIdStr;
-      auto token = session.PlaybackInfoChanged([this, appIdCopy](auto &&session, auto &&args)
-                                               {
-        try {
-          if (tsfnPlaybackStateChanged) {
-            auto tsfn = tsfnPlaybackStateChanged;
-            if (tsfn) {
-              tsfn.BlockingCall([appIdCopy](Napi::Env env, Napi::Function jsCallback) {
-                Napi::HandleScope scope(env);
-                jsCallback.Call({Napi::String::New(env, appIdCopy)});
-              });
-            }
-          }
-        } catch (...) {} });
-      tokens.push_back(token);
-    }
+    // Register for timeline properties changed with proper thread-safety
+    auto timelineToken = session.TimelinePropertiesChanged(
+        [this, appIdStr](auto &&, auto &&)
+        {
+          InvokeCallback("timelinepropertieschanged", appIdStr);
+        });
+    tokens.push_back(timelineToken);
 
-    // Register for timeline properties changed
-    {
-      std::string appIdCopy = appIdStr;
-      auto token = session.TimelinePropertiesChanged([this, appIdCopy](auto &&session, auto &&args)
-                                                     {
-        try {
-          if (tsfnTimelinePropertiesChanged) {
-            auto tsfn = tsfnTimelinePropertiesChanged;
-            if (tsfn) {
-              tsfn.BlockingCall([appIdCopy](Napi::Env env, Napi::Function jsCallback) {
-                Napi::HandleScope scope(env);
-                jsCallback.Call({Napi::String::New(env, appIdCopy)});
-              });
-            }
-          }
-        } catch (...) {} });
-      tokens.push_back(token);
-    }
-
-    // Register for media properties changed
-    {
-      std::string appIdCopy = appIdStr;
-      auto token = session.MediaPropertiesChanged([this, appIdCopy](auto &&session, auto &&args)
-                                                  {
-        try {
-          if (tsfnMediaPropertiesChanged) {
-            auto tsfn = tsfnMediaPropertiesChanged;
-            if (tsfn) {
-              tsfn.BlockingCall([appIdCopy](Napi::Env env, Napi::Function jsCallback) {
-                Napi::HandleScope scope(env);
-                jsCallback.Call({Napi::String::New(env, appIdCopy)});
-              });
-            }
-          }
-        } catch (...) {} });
-      tokens.push_back(token);
-    }
+    // Register for media properties changed with proper thread-safety
+    auto mediaToken = session.MediaPropertiesChanged(
+        [this, appIdStr](auto &&, auto &&)
+        {
+          InvokeCallback("mediapropertieschanged", appIdStr);
+        });
+    tokens.push_back(mediaToken);
 
     // Store the tokens
     sessionEventTokens[appId] = std::move(tokens);
   }
   catch (...)
   {
-    // Silently catch any exceptions to prevent crashes
+    // Silently catch exceptions
   }
 }
 
 void SMTCMedia::UnregisterSessionEvents(std::wstring const &sourceAppUserModelId)
 {
   std::lock_guard<std::mutex> lock(sessionsLock);
-
-  // Remove from the map
   sessionEventTokens.erase(sourceAppUserModelId);
 }
 
@@ -640,7 +692,7 @@ Napi::Value SMTCMedia::GetSessions(const Napi::CallbackInfo &info)
     uint32_t i = 0;
     for (auto session : sessions)
     {
-      // 确保为所有会话注册事件
+      // Register events for all sessions
       RegisterSessionEvents(session);
       result.Set(i++, CreateSessionObject(env, session));
     }
@@ -649,12 +701,12 @@ Napi::Value SMTCMedia::GetSessions(const Napi::CallbackInfo &info)
   }
   catch (const std::exception &e)
   {
-    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    ThrowJSException(env, "GetSessions", e);
     return env.Null();
   }
   catch (const winrt::hresult_error &e)
   {
-    Napi::Error::New(env, winrt::to_string(e.message())).ThrowAsJavaScriptException();
+    ThrowJSException(env, "GetSessions", e);
     return env.Null();
   }
 }
@@ -675,12 +727,12 @@ Napi::Value SMTCMedia::GetCurrentSession(const Napi::CallbackInfo &info)
   }
   catch (const std::exception &e)
   {
-    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    ThrowJSException(env, "GetCurrentSession", e);
     return env.Null();
   }
   catch (const winrt::hresult_error &e)
   {
-    Napi::Error::New(env, winrt::to_string(e.message())).ThrowAsJavaScriptException();
+    ThrowJSException(env, "GetCurrentSession", e);
     return env.Null();
   }
 }
@@ -713,16 +765,17 @@ Napi::Value SMTCMedia::GetSessionInfo(const Napi::CallbackInfo &info)
   }
   catch (const std::exception &e)
   {
-    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    ThrowJSException(env, "GetSessionInfo", e);
     return env.Null();
   }
   catch (const winrt::hresult_error &e)
   {
-    Napi::Error::New(env, winrt::to_string(e.message())).ThrowAsJavaScriptException();
+    ThrowJSException(env, "GetSessionInfo", e);
     return env.Null();
   }
 }
 
+// This method uses N-API's recommended approach for creating JS objects
 Napi::Object SMTCMedia::CreateSessionObject(Napi::Env env, GlobalSystemMediaTransportControlsSession const &session)
 {
   Napi::Object obj = Napi::Object::New(env);
@@ -732,12 +785,24 @@ Napi::Object SMTCMedia::CreateSessionObject(Napi::Env env, GlobalSystemMediaTran
     // Basic session info
     obj.Set("sourceAppUserModelId", Napi::String::New(env, hstring_to_string(session.SourceAppUserModelId())));
 
-    // Media properties
-    auto mediaPropertiesTask = session.TryGetMediaPropertiesAsync();
-    auto mediaProperties = mediaPropertiesTask.get();
-    if (mediaProperties)
+    // Use AsyncWork for the media properties in a real implementation
+    // For now, synchronously get properties but with better error handling
+    try
     {
-      obj.Set("mediaProperties", CreateMediaPropertiesObject(env, mediaProperties));
+      auto mediaPropertiesTask = session.TryGetMediaPropertiesAsync();
+      auto mediaProperties = mediaPropertiesTask.get();
+      if (mediaProperties)
+      {
+        obj.Set("mediaProperties", CreateMediaPropertiesObject(env, mediaProperties));
+      }
+    }
+    catch (const std::exception &e)
+    {
+      obj.Set("mediaPropertiesError", Napi::String::New(env, e.what()));
+    }
+    catch (const winrt::hresult_error &e)
+    {
+      obj.Set("mediaPropertiesError", Napi::String::New(env, winrt::to_string(e.message())));
     }
 
     // Timeline properties
