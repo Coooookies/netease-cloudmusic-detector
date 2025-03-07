@@ -225,43 +225,36 @@ function removeEventListeners() {
   }
 }
 
-// Main function to demonstrate the functionality
 function main() {
-  try {
-    console.log("=== Current Media Session ===")
-    const currentSession = getCurrentSession()
-    if (currentSession) {
-      console.log(formatSessionInfo(currentSession))
-    } else {
-      console.log("No active media session found")
-    }
+  // console.log("=== Current Media Session ===")
+  // const currentSession = getCurrentSession()
+  // if (currentSession) {
+  //   console.log(formatSessionInfo(currentSession))
+  // } else {
+  //   console.log("No active media session found")
+  // }
 
-    console.log("\n=== All Media Sessions ===")
-    const allSessions = getAllSessions()
-    if (allSessions.length > 0) {
-      allSessions.forEach((session, index) => {
-        console.log(`\n--- Session ${index + 1} ---`)
-        console.log(formatSessionInfo(session))
-      })
-    } else {
-      console.log("No media sessions found")
-    }
+  // console.log("\n=== All Media Sessions ===")
+  // const allSessions = getAllSessions()
+  // if (allSessions.length > 0) {
+  //   allSessions.forEach((session, index) => {
+  //     console.log(`\n--- Session ${index + 1} ---`)
+  //     console.log(formatSessionInfo(session))
+  //   })
+  // } else {
+  //   console.log("No media sessions found")
+  // }
 
-    // Set up event listeners to monitor changes
-    console.log("\n=== Setting up event listeners ===")
-    setupEventListeners()
+  // // Set up event listeners to monitor changes
+  // console.log("\n=== Setting up event listeners ===")
+  setupEventListeners()
 
-    console.log("\nListening for media session events. Press Ctrl+C to exit...")
-
-    // Set up cleanup for when the program exits
-    process.on("SIGINT", () => {
-      console.log("\nRemoving event listeners and exiting...")
-      removeEventListeners()
-      process.exit(0)
-    })
-  } catch (error) {
-    console.error("Error in main function:", error)
-  }
+  // Set up cleanup for when the program exits
+  process.on("SIGINT", () => {
+    console.log("\nRemoving event listeners and exiting...")
+    removeEventListeners()
+    process.exit(0)
+  })
 }
 
 // Example of monitoring media sessions for 30 seconds
