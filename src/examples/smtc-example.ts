@@ -53,6 +53,15 @@ enum PlaybackStatus {
   Paused = 5,
 }
 
+// Event names
+enum SMTCEvent {
+  SessionAdded = "sessionadded",
+  SessionRemoved = "sessionremoved",
+  PlaybackStateChanged = "playbackstatechanged",
+  TimelinePropertiesChanged = "timelinepropertieschanged",
+  MediaPropertiesChanged = "mediapropertieschanged",
+}
+
 // Create an instance of the SMTCMedia class
 const smtc = new smtcAddon.SMTCMedia()
 
@@ -105,10 +114,10 @@ function formatSessionInfo(session: MediaSession): string {
   }
 
   const tp = session.timelineProperties
-  result += `Duration: ${Math.round(
-    tp.endTimeInSeconds - tp.startTimeInSeconds
-  )}s\n`
-  result += `Position: ${Math.round(tp.positionInSeconds)}s\n`
+  result += `Duration: ${
+    Math.round((tp.endTimeInSeconds - tp.startTimeInSeconds) * 100) / 100
+  }s\n`
+  result += `Position: ${Math.round(tp.positionInSeconds * 100) / 100}s\n`
 
   const pi = session.playbackInfo
   result += `Playback Status: ${PlaybackStatus[pi.playbackStatus]}\n`
@@ -119,6 +128,69 @@ function formatSessionInfo(session: MediaSession): string {
   }
 
   return result
+}
+
+// Function to register event listeners
+function setupEventListeners() {
+  // Listen for new sessions
+  smtc.on(SMTCEvent.SessionAdded, (appId: string) => {
+    console.log(`\n[EVENT] New session added: ${appId}`)
+    const session = getSessionByAppId(appId)
+    if (session) {
+      console.log(formatSessionInfo(session))
+    }
+  })
+
+  // Listen for session removals
+  smtc.on(SMTCEvent.SessionRemoved, (appId: string) => {
+    console.log(`\n[EVENT] Session removed: ${appId}`)
+  })
+
+  // Listen for playback state changes
+  smtc.on(SMTCEvent.PlaybackStateChanged, (appId: string) => {
+    console.log(`\n[EVENT] Playback state changed for: ${appId}`)
+    const session = getSessionByAppId(appId)
+    if (session) {
+      const status = PlaybackStatus[session.playbackInfo.playbackStatus]
+      console.log(`New playback status: ${status}`)
+    }
+  })
+
+  // Listen for timeline updates
+  smtc.on(SMTCEvent.TimelinePropertiesChanged, (appId: string) => {
+    console.log(`\n[EVENT] Timeline properties changed for: ${appId}`)
+    const session = getSessionByAppId(appId)
+    if (session) {
+      const tp = session.timelineProperties
+      console.log(`Position: ${Math.round(tp.positionInSeconds * 100) / 100}s / ${
+        Math.round((tp.endTimeInSeconds - tp.startTimeInSeconds) * 100) / 100
+      }s`)
+    }
+  })
+
+  // Listen for media properties changes
+  smtc.on(SMTCEvent.MediaPropertiesChanged, (appId: string) => {
+    console.log(`\n[EVENT] Media properties changed for: ${appId}`)
+    const session = getSessionByAppId(appId)
+    if (session && session.mediaProperties) {
+      const mp = session.mediaProperties
+      console.log(`Now playing: ${mp.title} - ${mp.artist}`)
+    }
+  })
+
+  console.log("Event listeners set up successfully")
+}
+
+// Function to remove event listeners
+function removeEventListeners() {
+  // Remove all event listeners
+  smtc.off(SMTCEvent.SessionAdded)
+  smtc.off(SMTCEvent.SessionRemoved)
+  smtc.off(SMTCEvent.PlaybackStateChanged)
+  smtc.off(SMTCEvent.TimelinePropertiesChanged)
+  smtc.off(SMTCEvent.MediaPropertiesChanged)
+  
+  console.log("Event listeners removed")
 }
 
 // Main function to demonstrate the functionality
@@ -141,7 +213,53 @@ function main() {
   } else {
     console.log("No media sessions found")
   }
+
+  // Set up event listeners to monitor changes
+  console.log("\n=== Setting up event listeners ===")
+  setupEventListeners()
+  
+  console.log("\nListening for media session events. Press Ctrl+C to exit...")
+  
+  // Set up cleanup for when the program exits
+  process.on('SIGINT', () => {
+    console.log("\nRemoving event listeners and exiting...")
+    removeEventListeners()
+    process.exit(0)
+  })
 }
 
-// Run the main function
+// Example of monitoring media sessions for 30 seconds
+function runTimedExample() {
+  console.log("Starting 30-second monitoring example...")
+  
+  // Set up event listeners
+  setupEventListeners()
+  
+  // Show initial state
+  const allSessions = getAllSessions()
+  if (allSessions.length > 0) {
+    console.log("\nCurrent media sessions:")
+    allSessions.forEach((session, index) => {
+      console.log(`\n--- Session ${index + 1} ---`)
+      console.log(formatSessionInfo(session))
+    })
+  } else {
+    console.log("No media sessions currently active.")
+  }
+  
+  console.log("\nMonitoring for 30 seconds...")
+  
+  // Clean up after 30 seconds
+  setTimeout(() => {
+    removeEventListeners()
+    console.log("\nMonitoring complete.")
+    process.exit(0)
+  }, 30000)
+}
+
+// Run the main function to show current state
+// and set up continuous monitoring
 main()
+
+// Alternatively, use the timed example:
+// runTimedExample()
