@@ -11,7 +11,9 @@ const logger = () => {
     `${`${Math.floor(detector.status.position / 60)}`.padStart(
       2,
       "0"
-    )}:${`${Math.round(detector.status.position % 60)}`.padStart(2, "0")}`
+    )}:${`${Math.round(detector.status.position % 60)}`.padStart(2, "0")}`,
+    `${Math.round((detector.status.position / detector.status.duration) * 10000) /
+      100}%`
   )
 }
 
@@ -32,4 +34,4 @@ detector.on("position", (position) => {
   console.log("Song Position", position)
 })
 
-setInterval(logger, 1000)
+setInterval(logger, 100)

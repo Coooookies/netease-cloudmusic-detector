@@ -268,9 +268,12 @@ export class CloudmusicDetector extends Nanobus<{
           available: true,
           id: this.currentSongId,
           playing: !this.currentSongPausing,
-          position: this.currentSongPausing
-            ? this.currentSongPosition
-            : (now - this.currentSongRelativeTime) / 1000,
+          position: Math.min(
+            this.currentSongPausing
+              ? this.currentSongPosition
+              : (now - this.currentSongRelativeTime) / 1000,
+            this.currentSongDuration
+          ),
           duration: this.currentSongDuration,
           detail: {
             name: this.currentSongName,
