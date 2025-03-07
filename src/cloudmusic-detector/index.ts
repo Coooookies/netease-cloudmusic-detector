@@ -191,7 +191,7 @@ export class CloudmusicDetector extends Nanobus<{
             ? 0
             : Date.now() - position * 1000 - offset * 1000
 
-          this.emit("position", position)
+          this.emit("position", this.status.position)
           break
         }
 
@@ -228,20 +228,6 @@ export class CloudmusicDetector extends Nanobus<{
     this.currentSongPausing = false
     this.currentSongRelativeTime = 0
   }
-
-  // private async refreshCurrentSongDetail() {
-  //   const detail = await this.webdb.waitForSongDetail(this.currentSongId)
-
-  //   if (!detail) {
-  //     return
-  //   }
-
-  //   this.currentSongName = detail.name
-  //   this.currentSongCover = detail.album.cover
-  //   this.currentSongAlbumName = detail.album.name
-  //   this.currentSongArtistNames = detail.artists.map((item) => item.name)
-  //   this.currentSongDuration = detail.duration / 1000
-  // }
 
   private async refreshCurrentSongDetail(trackStatus: PlayingStatus) {
     const detail = trackStatus.trackIn.track
