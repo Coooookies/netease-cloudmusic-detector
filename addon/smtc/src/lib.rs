@@ -78,8 +78,8 @@ impl SessionManager {
   }
 }
 
-#[napi(js_name = "SmtcMonitor")]
-pub struct SmtcMonitor {
+#[napi(js_name = "SMTCMonitor")]
+pub struct SMTCMonitor {
   manager: Arc<Mutex<SessionManager>>,
   smtc_manager: Option<GlobalSystemMediaTransportControlsSessionManager>,
 }
@@ -108,7 +108,7 @@ fn buffer_to_napi_buffer(win_buffer: &WinBuffer) -> Result<Option<Buffer>> {
 
 // 初始化函数，不需要调用 windows::core::init()
 #[napi]
-impl SmtcMonitor {
+impl SMTCMonitor {
   #[napi(constructor)]
   pub fn new() -> Self {
     Self {
@@ -122,7 +122,7 @@ impl SmtcMonitor {
     let manager = self.get_manager()?;
     let manager_clone = manager.clone();
     let inner_manager = self.manager.clone();
-    
+
     // 初始化时主动扫描并注册现有会话，解决第三个问题
     self.scan_existing_sessions()?;
 
@@ -146,53 +146,12 @@ impl SmtcMonitor {
 
                   // 如果是新会话，添加到管理器并触发回调
                   if !inner.sessions.contains_key(&id) {
-                    // 监听会话的各种事件
-                    let media_props_callbacks = inner.media_props_callbacks.clone();
-                    let playback_info_callbacks = inner.playback_info_callbacks.clone();
-                    let timeline_props_callbacks = inner.timeline_props_callbacks.clone();
-
-                    let id_clone = id.clone();
-                    let _media_token =
-                      session.MediaPropertiesChanged(&TypedEventHandler::new(move |_, _| {
-                        let id = id_clone.clone();
-                        for callback in &media_props_callbacks {
-                          callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
-                        }
-                        Ok(())
-                      }));
-
-                    let id_clone = id.clone();
-                    let _playback_token =
-                      session.PlaybackInfoChanged(&TypedEventHandler::new(move |_, _| {
-                        let id = id_clone.clone();
-                        for callback in &playback_info_callbacks {
-                          callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
-                        }
-                        Ok(())
-                      }));
-
-                    let id_clone = id.clone();
-                    let _timeline_token =
-                      session.TimelinePropertiesChanged(&TypedEventHandler::new(move |_, _| {
-                        let id = id_clone.clone();
-                        for callback in &timeline_props_callbacks {
-                          callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
-                        }
-                        Ok(())
-                      }));
-
-                    inner.sessions.insert(
-                      id.clone(),
-                      InnerSession {
-                        session,
-                        callbacks: Vec::new(),
-                      },
+                    // 使用辅助方法注册会话
+                    Self::register_session(
+                      &mut inner, 
+                      id.clone(), 
+                      session
                     );
-
-                    // 通知会话已添加
-                    for callback in &inner.session_added_callbacks {
-                      callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
-                    }
                   }
                 }
               }
@@ -225,7 +184,7 @@ impl SmtcMonitor {
   #[napi(ts_args_type = "callback: (error:unknown, sourceAppId: string) => void")]
   pub fn on_session_added(&mut self, callback: JsFunction) -> Result<()> {
     // 修改为直接传递 appId 作为第一个参数
-    let tsfn: ThreadsafeFunction<String> = 
+    let tsfn: ThreadsafeFunction<String> =
       callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
     let mut inner = self.manager.lock().unwrap();
     inner.session_added_callbacks.push(tsfn);
@@ -234,7 +193,7 @@ impl SmtcMonitor {
 
   #[napi(ts_args_type = "callback: (error:unknown, sourceAppId: string) => void")]
   pub fn on_session_removed(&mut self, callback: JsFunction) -> Result<()> {
-    let tsfn: ThreadsafeFunction<String> = 
+    let tsfn: ThreadsafeFunction<String> =
       callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
     let mut inner = self.manager.lock().unwrap();
     inner.session_removed_callbacks.push(tsfn);
@@ -243,7 +202,7 @@ impl SmtcMonitor {
 
   #[napi(ts_args_type = "callback: (error:unknown, sourceAppId: string) => void")]
   pub fn on_media_properties_changed(&mut self, callback: JsFunction) -> Result<()> {
-    let tsfn: ThreadsafeFunction<String> = 
+    let tsfn: ThreadsafeFunction<String> =
       callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
     let mut inner = self.manager.lock().unwrap();
     inner.media_props_callbacks.push(tsfn);
@@ -252,7 +211,7 @@ impl SmtcMonitor {
 
   #[napi(ts_args_type = "callback: (error:unknown, sourceAppId: string) => void")]
   pub fn on_playback_info_changed(&mut self, callback: JsFunction) -> Result<()> {
-    let tsfn: ThreadsafeFunction<String> = 
+    let tsfn: ThreadsafeFunction<String> =
       callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
     let mut inner = self.manager.lock().unwrap();
     inner.playback_info_callbacks.push(tsfn);
@@ -261,7 +220,7 @@ impl SmtcMonitor {
 
   #[napi(ts_args_type = "callback: (error:unknown, sourceAppId: string) => void")]
   pub fn on_timeline_properties_changed(&mut self, callback: JsFunction) -> Result<()> {
-    let tsfn: ThreadsafeFunction<String> = 
+    let tsfn: ThreadsafeFunction<String> =
       callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
     let mut inner = self.manager.lock().unwrap();
     inner.timeline_props_callbacks.push(tsfn);
@@ -459,66 +418,83 @@ impl SmtcMonitor {
     let manager = self.get_manager()?;
     if let Ok(sessions) = manager.GetSessions() {
       let mut inner = self.manager.lock().unwrap();
-      
+
       if let Ok(size) = sessions.Size() {
         for i in 0..size {
           if let Ok(session) = sessions.GetAt(i) {
             if let Ok(id) = session.SourceAppUserModelId() {
               let id = id.to_string();
-              
+
               // 如果是新会话，添加到管理器并设置监听
               if !inner.sessions.contains_key(&id) {
-                // 监听会话的各种事件
-                let media_props_callbacks = inner.media_props_callbacks.clone();
-                let playback_info_callbacks = inner.playback_info_callbacks.clone();
-                let timeline_props_callbacks = inner.timeline_props_callbacks.clone();
-                
-                let id_clone = id.clone();
-                let _media_token = session.MediaPropertiesChanged(&TypedEventHandler::new(move |_, _| {
-                  let id = id_clone.clone();
-                  for callback in &media_props_callbacks {
-                    callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
-                  }
-                  Ok(())
-                }));
-                
-                let id_clone = id.clone();
-                let _playback_token = session.PlaybackInfoChanged(&TypedEventHandler::new(move |_, _| {
-                  let id = id_clone.clone();
-                  for callback in &playback_info_callbacks {
-                    callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
-                  }
-                  Ok(())
-                }));
-                
-                let id_clone = id.clone();
-                let _timeline_token = session.TimelinePropertiesChanged(&TypedEventHandler::new(move |_, _| {
-                  let id = id_clone.clone();
-                  for callback in &timeline_props_callbacks {
-                    callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
-                  }
-                  Ok(())
-                }));
-                
-                inner.sessions.insert(
+                // 使用辅助方法注册会话
+                Self::register_session(
+                  &mut inner,
                   id.clone(),
-                  InnerSession {
-                    session,
-                    callbacks: Vec::new(),
-                  },
+                  session
                 );
-                
-                // 通知会话已添加
-                for callback in &inner.session_added_callbacks {
-                  callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
-                }
               }
             }
           }
         }
       }
     }
-    
+
     Ok(())
+  }
+
+  // 添加新的辅助方法处理会话注册和监听
+  fn register_session(
+    inner: &mut SessionManager,
+    id: String,
+    session: GlobalSystemMediaTransportControlsSession
+  ) {
+    // 监听会话的各种事件
+    let media_props_callbacks = inner.media_props_callbacks.clone();
+    let playback_info_callbacks = inner.playback_info_callbacks.clone();
+    let timeline_props_callbacks = inner.timeline_props_callbacks.clone();
+
+    let id_clone = id.clone();
+    let _media_token =
+      session.MediaPropertiesChanged(&TypedEventHandler::new(move |_, _| {
+        let id = id_clone.clone();
+        for callback in &media_props_callbacks {
+          callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
+        }
+        Ok(())
+      }));
+
+    let id_clone = id.clone();
+    let _playback_token =
+      session.PlaybackInfoChanged(&TypedEventHandler::new(move |_, _| {
+        let id = id_clone.clone();
+        for callback in &playback_info_callbacks {
+          callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
+        }
+        Ok(())
+      }));
+
+    let id_clone = id.clone();
+    let _timeline_token =
+      session.TimelinePropertiesChanged(&TypedEventHandler::new(move |_, _| {
+        let id = id_clone.clone();
+        for callback in &timeline_props_callbacks {
+          callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
+        }
+        Ok(())
+      }));
+
+    inner.sessions.insert(
+      id.clone(),
+      InnerSession {
+        session,
+        callbacks: Vec::new(),
+      },
+    );
+
+    // 通知会话已添加
+    for callback in &inner.session_added_callbacks {
+      callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
+    }
   }
 }
