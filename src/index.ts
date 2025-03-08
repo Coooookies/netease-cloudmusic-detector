@@ -4,48 +4,32 @@ const { SMTCMonitor } = pkg
 const smtcMonitor = new SMTCMonitor()
 
 smtcMonitor.onSessionAdded((error, session) => {
-  console.log("Session added:", session)
-  try {
-    smtcMonitor.getSessionById(session)
-  } catch (error) {
-    console.log(error)
-  }
+  console.log("Session added:", session.sourceAppId)
 })
 
-smtcMonitor.onSessionRemoved((error, session) => {
-  console.log("Session removed:", session)
-  try {
-    smtcMonitor.getSessionById(session)
-  } catch (error) {
-    console.log(error)
-  }
+smtcMonitor.onSessionRemoved((error, sessionId) => {
+  console.log("Session removed:", sessionId)
 })
 
 smtcMonitor.onMediaPropertiesChanged((error, session) => {
-  console.log("Media properties changed:", session)
-  try {
-    smtcMonitor.getSessionById(session)
-  } catch (error) {
-    console.log(error)
-  }
+  console.log("Media properties changed:", session.sourceAppId, session.title)
 })
 
 smtcMonitor.onPlaybackInfoChanged((error, session) => {
-  console.log("Playback info changed:", session)
-  try {
-    smtcMonitor.getSessionById(session)
-  } catch (error) {
-    console.log(error)
-  }
+  console.log(
+    "Playback info changed:",
+    session.sourceAppId,
+    session.playbackStatus
+  )
 })
 
 smtcMonitor.onTimelinePropertiesChanged((error, session) => {
-  console.log("Timeline properties changed:", session)
-  try {
-    smtcMonitor.getSessionById(session)
-  } catch (error) {
-    console.log(error)
-  }
+  console.log(
+    "Timeline properties changed:",
+    session.sourceAppId,
+    session.duration,
+    session.position
+  )
 })
 
 smtcMonitor.initialize()

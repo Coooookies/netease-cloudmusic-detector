@@ -10,6 +10,7 @@ use napi::{
 };
 use std::{
   collections::HashMap,
+  fmt,
   sync::{Arc, Mutex},
   time::{SystemTime, UNIX_EPOCH},
 };
@@ -31,7 +32,9 @@ fn win_to_napi_err<T>(result: core::Result<T>) -> Result<T> {
   result.map_err(|e| Error::new(Status::GenericFailure, e.to_string()))
 }
 
+// 移除 Debug 派生特性，手动实现
 #[napi(object)]
+#[derive(Clone)]
 pub struct MediaInfo {
   pub source_app_id: String,
   pub title: String,
@@ -50,6 +53,28 @@ pub struct MediaInfo {
   pub last_updated_time: f64,
 }
 
+// 手动实现 Debug trait，忽略 thumbnail 字段
+impl fmt::Debug for MediaInfo {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_struct("MediaInfo")
+      .field("source_app_id", &self.source_app_id)
+      .field("title", &self.title)
+      .field("artist", &self.artist)
+      .field("album_title", &self.album_title)
+      .field("album_artist", &self.album_artist)
+      .field("genres", &self.genres)
+      .field("album_track_count", &self.album_track_count)
+      .field("track_number", &self.track_number)
+      .field("thumbnail", &"[Buffer]") // 忽略实际内容，只显示占位符
+      .field("playback_status", &self.playback_status)
+      .field("playback_type", &self.playback_type)
+      .field("position", &self.position)
+      .field("duration", &self.duration)
+      .field("last_updated_time", &self.last_updated_time)
+      .finish()
+  }
+}
+
 #[allow(dead_code)]
 struct InnerSession {
   session: GlobalSystemMediaTransportControlsSession,
@@ -58,11 +83,12 @@ struct InnerSession {
 
 struct SessionManager {
   sessions: HashMap<String, InnerSession>,
-  session_added_callbacks: Vec<ThreadsafeFunction<String>>,
+  // 修改回调函数类型为 MediaInfo
+  session_added_callbacks: Vec<ThreadsafeFunction<MediaInfo>>,
   session_removed_callbacks: Vec<ThreadsafeFunction<String>>,
-  media_props_callbacks: Vec<ThreadsafeFunction<String>>,
-  playback_info_callbacks: Vec<ThreadsafeFunction<String>>,
-  timeline_props_callbacks: Vec<ThreadsafeFunction<String>>,
+  media_props_callbacks: Vec<ThreadsafeFunction<MediaInfo>>,
+  playback_info_callbacks: Vec<ThreadsafeFunction<MediaInfo>>,
+  timeline_props_callbacks: Vec<ThreadsafeFunction<MediaInfo>>,
 }
 
 impl SessionManager {
@@ -181,18 +207,19 @@ impl SMTCMonitor {
     Ok(())
   }
 
-  #[napi(ts_args_type = "callback: (error:unknown, sourceAppId: string) => void")]
+  // 修改回调参数类型
+  #[napi(ts_args_type = "callback: (error:unknown, media: MediaInfo) => void")]
   pub fn on_session_added(&mut self, callback: JsFunction) -> Result<()> {
-    // 修改为直接传递 appId 作为第一个参数
-    let tsfn: ThreadsafeFunction<String> =
+    let tsfn: ThreadsafeFunction<MediaInfo> =
       callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
     let mut inner = self.manager.lock().unwrap();
     inner.session_added_callbacks.push(tsfn);
     Ok(())
   }
 
-  #[napi(ts_args_type = "callback: (error:unknown, sourceAppId: string) => void")]
+  #[napi(ts_args_type = "callback: (error:unknown, sourceAppId: MediaInfo) => void")]
   pub fn on_session_removed(&mut self, callback: JsFunction) -> Result<()> {
+    // 会话移除事件仍保留原样，只传递 ID
     let tsfn: ThreadsafeFunction<String> =
       callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
     let mut inner = self.manager.lock().unwrap();
@@ -200,27 +227,27 @@ impl SMTCMonitor {
     Ok(())
   }
 
-  #[napi(ts_args_type = "callback: (error:unknown, sourceAppId: string) => void")]
+  #[napi(ts_args_type = "callback: (error:unknown, media: MediaInfo) => void")]
   pub fn on_media_properties_changed(&mut self, callback: JsFunction) -> Result<()> {
-    let tsfn: ThreadsafeFunction<String> =
+    let tsfn: ThreadsafeFunction<MediaInfo> =
       callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
     let mut inner = self.manager.lock().unwrap();
     inner.media_props_callbacks.push(tsfn);
     Ok(())
   }
 
-  #[napi(ts_args_type = "callback: (error:unknown, sourceAppId: string) => void")]
+  #[napi(ts_args_type = "callback: (error:unknown, media: MediaInfo) => void")]
   pub fn on_playback_info_changed(&mut self, callback: JsFunction) -> Result<()> {
-    let tsfn: ThreadsafeFunction<String> =
+    let tsfn: ThreadsafeFunction<MediaInfo> =
       callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
     let mut inner = self.manager.lock().unwrap();
     inner.playback_info_callbacks.push(tsfn);
     Ok(())
   }
 
-  #[napi(ts_args_type = "callback: (error:unknown, sourceAppId: string) => void")]
+  #[napi(ts_args_type = "callback: (error:unknown, media: MediaInfo) => void")]
   pub fn on_timeline_properties_changed(&mut self, callback: JsFunction) -> Result<()> {
-    let tsfn: ThreadsafeFunction<String> =
+    let tsfn: ThreadsafeFunction<MediaInfo> =
       callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
     let mut inner = self.manager.lock().unwrap();
     inner.timeline_props_callbacks.push(tsfn);
@@ -293,9 +320,121 @@ impl SMTCMonitor {
     }
   }
 
+  // 修改原有方法，使用新的公共方法
   fn session_to_media_info_sync(
     &self,
     session: &GlobalSystemMediaTransportControlsSession,
+  ) -> Result<Option<MediaInfo>> {
+    // 使用公共方法获取 MediaInfo
+    Self::get_media_info_for_session(session)
+  }
+
+  // 添加扫描现有会话的辅助方法
+  fn scan_existing_sessions(&mut self) -> Result<()> {
+    let manager = self.get_manager()?;
+    if let Ok(sessions) = manager.GetSessions() {
+      let mut inner = self.manager.lock().unwrap();
+
+      if let Ok(size) = sessions.Size() {
+        for i in 0..size {
+          if let Ok(session) = sessions.GetAt(i) {
+            if let Ok(id) = session.SourceAppUserModelId() {
+              let id = id.to_string();
+
+              // 如果是新会话，添加到管理器并设置监听
+              if !inner.sessions.contains_key(&id) {
+                // 使用辅助方法注册会话
+                Self::register_session(
+                  &mut inner,
+                  id.clone(),
+                  session
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+
+    Ok(())
+  }
+
+  // 添加新的辅助方法处理会话注册和监听
+  // 修改 register_session 方法，现在获取 MediaInfo 对象并传递给回调
+  fn register_session(
+    inner: &mut SessionManager,
+    id: String,
+    session: GlobalSystemMediaTransportControlsSession
+  ) {
+    // 为每个回调单独克隆会话对象和回调列表
+    let media_session_clone = session.clone();
+    let media_props_callbacks = inner.media_props_callbacks.clone();
+    
+    // 为 PlaybackInfoChanged 创建独立的会话克隆
+    let playback_session_clone = session.clone();
+    let playback_info_callbacks = inner.playback_info_callbacks.clone();
+    
+    // 为 TimelinePropertiesChanged 创建独立的会话克隆
+    let timeline_session_clone = session.clone();
+    let timeline_props_callbacks = inner.timeline_props_callbacks.clone();
+    
+    // 媒体属性改变事件
+    let _media_token =
+      session.MediaPropertiesChanged(&TypedEventHandler::new(move |_, _| {
+        // 尝试获取最新的 MediaInfo
+        if let Ok(Some(media_info)) = Self::get_media_info_for_session(&media_session_clone) {
+          for callback in &media_props_callbacks {
+            callback.call(Ok(media_info.clone()), ThreadsafeFunctionCallMode::Blocking);
+          }
+        }
+        Ok(())
+      }));
+
+    // 播放信息改变事件
+    let _playback_token =
+      session.PlaybackInfoChanged(&TypedEventHandler::new(move |_, _| {
+        // 尝试获取最新的 MediaInfo
+        if let Ok(Some(media_info)) = Self::get_media_info_for_session(&playback_session_clone) {
+          for callback in &playback_info_callbacks {
+            callback.call(Ok(media_info.clone()), ThreadsafeFunctionCallMode::Blocking);
+          }
+        }
+        Ok(())
+      }));
+
+    // 时间线改变事件
+    let _timeline_token =
+      session.TimelinePropertiesChanged(&TypedEventHandler::new(move |_, _| {
+        // 尝试获取最新的 MediaInfo
+        if let Ok(Some(media_info)) = Self::get_media_info_for_session(&timeline_session_clone) {
+          for callback in &timeline_props_callbacks {
+            callback.call(Ok(media_info.clone()), ThreadsafeFunctionCallMode::Blocking);
+          }
+        }
+        Ok(())
+      }));
+
+    // 将会话保存到内部状态
+    inner.sessions.insert(
+      id.clone(),
+      InnerSession {
+        session: session.clone(),
+        callbacks: Vec::new(),
+      },
+    );
+
+    // 通知会话已添加，并传递完整的 MediaInfo
+    // 尝试获取 MediaInfo
+    if let Ok(Some(media_info)) = Self::get_media_info_for_session(&session) {
+      for callback in &inner.session_added_callbacks {
+        callback.call(Ok(media_info.clone()), ThreadsafeFunctionCallMode::Blocking);
+      }
+    }
+  }
+
+  // 添加用于回调的公共方法，获取会话的 MediaInfo
+  fn get_media_info_for_session(
+    session: &GlobalSystemMediaTransportControlsSession
   ) -> Result<Option<MediaInfo>> {
     if let Ok(media_props) = session.TryGetMediaPropertiesAsync() {
       let media_props = win_to_napi_err(media_props.get())?;
@@ -317,7 +456,7 @@ impl SMTCMonitor {
       let album_track_count = win_to_napi_err(media_props.AlbumTrackCount())?;
       let track_number = win_to_napi_err(media_props.TrackNumber())?;
 
-      // 修复缩略图读取逻辑
+      // 缩略图读取逻辑
       let thumbnail = if let Ok(thumbnail_ref) = media_props.Thumbnail() {
         if let Ok(stream_op) = thumbnail_ref.OpenReadAsync() {
           if let Ok(stream) = win_to_napi_err(stream_op.get()) {
@@ -330,7 +469,6 @@ impl SMTCMonitor {
               win_to_napi_err(buffer.Capacity())?,
               InputStreamOptions::None,
             ) {
-              // 不要创建无用的变量 _
               if win_to_napi_err(read_op.get()).is_ok() {
                 buffer_to_napi_buffer(&buffer)?
               } else {
@@ -349,10 +487,9 @@ impl SMTCMonitor {
         None
       };
 
-      // 获取播放信息，正确处理枚举
+      // 获取播放信息
       let playback_info = win_to_napi_err(session.GetPlaybackInfo())?;
 
-      // 将枚举转换为数字的正确方式
       let playback_status = match win_to_napi_err(playback_info.PlaybackStatus())? {
         GlobalSystemMediaTransportControlsSessionPlaybackStatus::Closed => 0,
         GlobalSystemMediaTransportControlsSessionPlaybackStatus::Opened => 1,
@@ -410,91 +547,6 @@ impl SMTCMonitor {
       }))
     } else {
       Ok(None)
-    }
-  }
-
-  // 添加扫描现有会话的辅助方法
-  fn scan_existing_sessions(&mut self) -> Result<()> {
-    let manager = self.get_manager()?;
-    if let Ok(sessions) = manager.GetSessions() {
-      let mut inner = self.manager.lock().unwrap();
-
-      if let Ok(size) = sessions.Size() {
-        for i in 0..size {
-          if let Ok(session) = sessions.GetAt(i) {
-            if let Ok(id) = session.SourceAppUserModelId() {
-              let id = id.to_string();
-
-              // 如果是新会话，添加到管理器并设置监听
-              if !inner.sessions.contains_key(&id) {
-                // 使用辅助方法注册会话
-                Self::register_session(
-                  &mut inner,
-                  id.clone(),
-                  session
-                );
-              }
-            }
-          }
-        }
-      }
-    }
-
-    Ok(())
-  }
-
-  // 添加新的辅助方法处理会话注册和监听
-  fn register_session(
-    inner: &mut SessionManager,
-    id: String,
-    session: GlobalSystemMediaTransportControlsSession
-  ) {
-    // 监听会话的各种事件
-    let media_props_callbacks = inner.media_props_callbacks.clone();
-    let playback_info_callbacks = inner.playback_info_callbacks.clone();
-    let timeline_props_callbacks = inner.timeline_props_callbacks.clone();
-
-    let id_clone = id.clone();
-    let _media_token =
-      session.MediaPropertiesChanged(&TypedEventHandler::new(move |_, _| {
-        let id = id_clone.clone();
-        for callback in &media_props_callbacks {
-          callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
-        }
-        Ok(())
-      }));
-
-    let id_clone = id.clone();
-    let _playback_token =
-      session.PlaybackInfoChanged(&TypedEventHandler::new(move |_, _| {
-        let id = id_clone.clone();
-        for callback in &playback_info_callbacks {
-          callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
-        }
-        Ok(())
-      }));
-
-    let id_clone = id.clone();
-    let _timeline_token =
-      session.TimelinePropertiesChanged(&TypedEventHandler::new(move |_, _| {
-        let id = id_clone.clone();
-        for callback in &timeline_props_callbacks {
-          callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
-        }
-        Ok(())
-      }));
-
-    inner.sessions.insert(
-      id.clone(),
-      InnerSession {
-        session,
-        callbacks: Vec::new(),
-      },
-    );
-
-    // 通知会话已添加
-    for callback in &inner.session_added_callbacks {
-      callback.call(Ok(id.clone()), ThreadsafeFunctionCallMode::Blocking);
     }
   }
 }
