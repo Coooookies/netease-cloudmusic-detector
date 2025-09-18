@@ -27,6 +27,11 @@ export type PlayingStatusAlbum = {
   alias: string[]
   transNames: string[]
   explicit: boolean
+  override?: {
+    title: ""
+    subTitle: ""
+    imageUrl: ""
+  }
 }
 
 export type PlayingStatusFreeTrialPrivilege = {
@@ -131,6 +136,60 @@ export type PlayingStatus = {
   flag: number
   fromType: string
   triggerScene: string
+}
+
+export type PlayingPrivilegeCheckResult = {
+  id: string
+  alias: string[]
+  commentThreadId: string
+  copyrightId: string
+  duration: number
+  mvid: string
+  name: string
+  cd: string
+  position: number
+  ringtone: string
+  rtUrl: string | null
+  status: number
+  pstatus: number
+  fee: number
+  version: number
+  songType: number
+  mst: number
+  popularity: number
+  ftype: number
+  rtUrls: string[]
+  noCopyrightRcmd: string | null
+  originCoverType: number
+  mark: string
+  artists: PlayingStatusFullArtist[]
+  algorithm: ""
+  songTag: {}
+  album: PlayingStatusAlbum
+  explicit: false
+  privilege: PlayingStatusPrivilege
+}
+
+export type PlayingStatusFullArtist = {
+  accountId: string
+  id: string
+  albumSize: number
+  alia: string[]
+  alias: string[]
+  fansGroup: unknown // ?
+  img1v1Url: string
+  name: string
+  picId: string
+  trans: string
+  transName: string
+  fansSize: number
+  musicSize: number
+  algorithm: string
+  override: {
+    title: string
+    subTitle: string
+    imageUrl: string
+  }
 }
 
 export type PlayingStatusType = keyof typeof CLOUDMUSIC_ELOG_MATCHES

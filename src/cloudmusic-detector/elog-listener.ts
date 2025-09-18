@@ -32,7 +32,6 @@ export default class ElogListener extends Nanobus<{
 
   public async start() {
     await fsPromises.access(this.filePath)
-
     const buffer = await fsPromises.readFile(this.filePath)
     const dataArray = new Uint8Array(buffer)
     const lines = ElogAnalysis.decode(dataArray).split("\n")

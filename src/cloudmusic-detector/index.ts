@@ -3,7 +3,7 @@ import Webdb from "./webdb.js"
 import ElogAnalysis from "./elog-analysis.js"
 import ElogListener from "./elog-listener.js"
 import { CLOUDMUSIC_ELOG_MATCHES } from "./constant.js"
-import type { DetectorStatus, PlayingStatus } from "./types.js"
+import type { DetectorStatus, PlayingPrivilegeCheckResult } from "./types.js"
 
 export class CloudmusicDetector extends Nanobus<{
   play: (songId: number) => void
@@ -48,7 +48,7 @@ export class CloudmusicDetector extends Nanobus<{
     let songPlayTime = 0
     let songPosition = 0
     let songPausing = false
-    let songTrackDetail: PlayingStatus | null = null
+    let songTrackDetail: PlayingPrivilegeCheckResult | null = null
 
     line: for (const line of lines.reverse()) {
       const headers = ElogAnalysis.getHeader(line)
@@ -70,7 +70,7 @@ export class CloudmusicDetector extends Nanobus<{
           const data = parser.args(line)
 
           if (data !== null && songId === -1) {
-            songId = +data.trackIn.track.id
+            songId = +data.id
             songPlayTime = headers.timestamp
             songTrackDetail = data
           }
@@ -160,11 +160,11 @@ export class CloudmusicDetector extends Nanobus<{
           const { args } = CLOUDMUSIC_ELOG_MATCHES.SET_PLAYING
           const data = args(line)
 
-          if (data === null) {
+          if (data === null || +data.id === this.currentSongId) {
             break
           }
 
-          this.currentSongId = +data.trackIn.track.id
+          this.currentSongId = +data.id
           this.currentSongPausing = true
           this.currentSongPosition = 0
           this.currentSongRelativeTime = 0
@@ -229,9 +229,10 @@ export class CloudmusicDetector extends Nanobus<{
     this.currentSongRelativeTime = 0
   }
 
-  private async refreshCurrentSongDetail(trackStatus: PlayingStatus) {
-    const detail = trackStatus.trackIn.track
-
+  private async refreshCurrentSongDetail(
+    trackStatus: PlayingPrivilegeCheckResult
+  ) {
+    const detail = trackStatus
     this.currentSongName = detail.name
     this.currentSongCover = detail.album.cover
     this.currentSongAlbumName = detail.album.name

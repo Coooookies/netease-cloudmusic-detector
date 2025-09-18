@@ -1,6 +1,6 @@
 import path from "node:path"
 import { getLocalAppDataPath } from "../utils.js"
-import { type PlayingStatus } from "./types.js"
+import type { PlayingPrivilegeCheckResult } from "./types.js"
 
 export const CLOUDMUSIC_DIR = path.join(
   getLocalAppDataPath(),
@@ -23,11 +23,13 @@ export const CLOUDMUSIC_ELOG_MATCHES = {
     args: (_: string) => true,
   },
   SET_PLAYING: {
-    rule: (row: string) => row.includes(`【playing】,"setPlaying"`),
+    rule: (row: string) => row.includes(`【playing】,"checkPlayPrivilege",`),
     args: (row: string) => {
-      const regex = /\{.*\}$/
+      const regex = /\{.*\}/
       const matches = row.match(regex)
-      return matches ? (JSON.parse(matches[0]) as PlayingStatus) : null
+      return matches
+        ? (JSON.parse(matches[0]) as PlayingPrivilegeCheckResult)
+        : null
     },
   },
   SET_PLAYING_POSITION: {
