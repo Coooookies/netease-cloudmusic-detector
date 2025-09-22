@@ -40,7 +40,7 @@ export class CloudmusicDetector extends Nanobus<{
     this.listener.stop()
   }
 
-  private preloadLines(lines: string[]) {
+  private async preloadLines(lines: string[]) {
     const now = Date.now()
     const records: string[] = []
 
@@ -83,6 +83,26 @@ export class CloudmusicDetector extends Nanobus<{
           }
           break line
         }
+
+        case "NATIVE_SONG_LOAD": {
+          const parser = CLOUDMUSIC_ELOG_MATCHES.NATIVE_SONG_LOAD
+          const data = parser.args(line)
+
+          if (data !== null && songId === -1) {
+            songId = +data.songId
+            songPlayTime = headers.timestamp
+
+            const track = await this.webdb.waitForSongDetail(songId)
+            songTrackDetail = {
+              name: track.name,
+              cover: track.album.cover,
+              albumName: track.album.name,
+              artists: track.artists.map((item) => item.name),
+              duration: track.duration / 1000,
+            }
+          }
+        }
+
         case "SET_PLAYING": {
           const parser = CLOUDMUSIC_ELOG_MATCHES.SET_PLAYING
           const data = parser.args(line)
@@ -164,8 +184,7 @@ export class CloudmusicDetector extends Nanobus<{
   }
 
   private bindEvents() {
-    this.listener.on("line", (line) => {
-      // console.log(line)
+    this.listener.on("line", async (line) => {
       const headers = ElogAnalysis.getHeader(line)
 
       if (!headers) {
@@ -211,8 +230,6 @@ export class CloudmusicDetector extends Nanobus<{
         }
 
         case "PLAY_ONE_TRACKIN_PLAYING_LIST": {
-          console.log(1)
-
           const { args } = CLOUDMUSIC_ELOG_MATCHES.PLAY_ONE_TRACKIN_PLAYING_LIST
           const data = args(line)
 
@@ -221,7 +238,7 @@ export class CloudmusicDetector extends Nanobus<{
           }
 
           this.currentSongId = +data.track.id
-          this.currentSongPausing = true
+          this.currentSongPausing = false
           this.currentSongPosition = 0
           this.currentSongRelativeTime = 0
           this.refreshCurrentSongDetail({
@@ -234,6 +251,36 @@ export class CloudmusicDetector extends Nanobus<{
           this.emit("play", this.currentSongId)
 
           break
+        }
+
+        case "NATIVE_SONG_LOAD": {
+          const parser = CLOUDMUSIC_ELOG_MATCHES.NATIVE_SONG_LOAD
+          const data = parser.args(line)
+
+          if (data === null || +data.songId === this.currentSongId) {
+            break
+          }
+
+          const track = await this.webdb.waitForSongDetail(+data.songId, 20)
+          const newRelative = now - this.currentSongPosition * 1000
+          const newPosition = (now - this.currentSongRelativeTime) / 1000
+
+          this.currentSongId = +data.songId
+          this.currentSongPosition = this.currentSongPausing
+            ? newPosition - offset
+            : 0
+          this.currentSongRelativeTime = this.currentSongPausing
+            ? 0
+            : newRelative - offset * 1000
+
+          this.refreshCurrentSongDetail({
+            name: track.name,
+            cover: track.album.cover,
+            albumName: track.album.name,
+            artists: track.artists.map((item) => item.name),
+            duration: track.duration / 1000,
+          })
+          this.emit("play", this.currentSongId)
         }
 
         // 进度拖拽

@@ -216,6 +216,33 @@ export type TrackIn = {
   duration: number
 }
 
+export type NativeSongLoadTrack = {
+  bitrate: number
+  type: number
+  volumeDelta: number
+  songId: string
+  fileSize: number
+  musicurl: string
+  freeTrialInfo: unknown
+  freeTrialPrivilege: {
+    resConsumable: boolean
+    userConsumable: boolean
+    listenType: string | null
+    cannotListenReason: string | null
+    playReason: string | null
+    freeLimitTagType: string | null
+  }
+  level: string
+  md5: string
+  songDuration: string
+  extHeader: string
+  audioFormat: string
+  podcastCtrp: unknown
+  rightSource: number
+  audioType: string
+  br: string
+}
+
 export type DetectorUnavailableStatus = {
   available: false
   id: -1

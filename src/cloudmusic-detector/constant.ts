@@ -1,6 +1,7 @@
 import path from "node:path"
 import { getLocalAppDataPath } from "../utils.js"
 import type {
+  NativeSongLoadTrack,
   PlayingPrivilegeCheckResult,
   PlayingStatusTrackIn,
 } from "./types.js"
@@ -52,7 +53,15 @@ export const CLOUDMUSIC_ELOG_MATCHES = {
       return matches ? (JSON.parse(matches[0]) as PlayingStatusTrackIn) : null
     },
   },
-
+  NATIVE_SONG_LOAD: {
+    rule: (row: string) =>
+      row.includes(`【playing】,"native播放资源load完成，开始播放"`),
+    args: (row: string) => {
+      const regex = /\{.*\}/
+      const matches = row.match(regex)
+      return matches ? (JSON.parse(matches[0]) as NativeSongLoadTrack) : null
+    },
+  },
   SET_PLAYING_STATUS: {
     rule: (row: string) => row.includes(`【playing】,"native播放state"`),
     args: (row: string) => {

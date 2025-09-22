@@ -37,7 +37,7 @@ export default class Webdb {
 
   public async waitForSongDetail(
     expectSongId: number,
-    interval = 200
+    interval = 100
   ): Promise<PlayingStatusTrack> {
     while (true) {
       const detail = this.getCurrentSongDetail(expectSongId)
