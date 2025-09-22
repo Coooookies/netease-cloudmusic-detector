@@ -3,7 +3,7 @@ import Webdb from "./webdb.js"
 import ElogAnalysis from "./elog-analysis.js"
 import ElogListener from "./elog-listener.js"
 import { CLOUDMUSIC_ELOG_MATCHES } from "./constant.js"
-import type { DetectorStatus, PlayingPrivilegeCheckResult } from "./types.js"
+import type { DetectorStatus, TrackIn } from "./types.js"
 
 export class CloudmusicDetector extends Nanobus<{
   play: (songId: number) => void
@@ -48,7 +48,7 @@ export class CloudmusicDetector extends Nanobus<{
     let songPlayTime = 0
     let songPosition = 0
     let songPausing = false
-    let songTrackDetail: PlayingPrivilegeCheckResult | null = null
+    let songTrackDetail: TrackIn | null = null
 
     line: for (const line of lines.reverse()) {
       const headers = ElogAnalysis.getHeader(line)
@@ -65,6 +65,24 @@ export class CloudmusicDetector extends Nanobus<{
           return
           // return Promise.resolve()
         }
+
+        case "PLAY_ONE_TRACKIN_PLAYING_LIST": {
+          const parser = CLOUDMUSIC_ELOG_MATCHES.PLAY_ONE_TRACKIN_PLAYING_LIST
+          const data = parser.args(line)
+
+          if (data !== null && songId === -1) {
+            songId = +data.id
+            songPlayTime = headers.timestamp
+            songTrackDetail = {
+              name: data.track.name,
+              cover: data.track.album.cover,
+              albumName: data.track.album.name,
+              artists: data.track.artists.map((item) => item.name),
+              duration: data.track.duration / 1000,
+            }
+          }
+          break line
+        }
         case "SET_PLAYING": {
           const parser = CLOUDMUSIC_ELOG_MATCHES.SET_PLAYING
           const data = parser.args(line)
@@ -72,7 +90,13 @@ export class CloudmusicDetector extends Nanobus<{
           if (data !== null && songId === -1) {
             songId = +data.id
             songPlayTime = headers.timestamp
-            songTrackDetail = data
+            songTrackDetail = {
+              name: data.name,
+              cover: data.album.cover,
+              albumName: data.album.name,
+              artists: data.artists.map((item) => item.name),
+              duration: data.duration / 1000,
+            }
           }
           break line
         }
@@ -133,12 +157,15 @@ export class CloudmusicDetector extends Nanobus<{
     this.currentSongPausing = songPausing
     this.currentSongPosition = songPausing ? songPosition : 0
     this.currentSongRelativeTime = songPausing ? 0 : now - songPosition * 1000
-    this.refreshCurrentSongDetail(songTrackDetail!)
-    // return this.refreshCurrentSongDetail()
+
+    if (songTrackDetail) {
+      this.refreshCurrentSongDetail(songTrackDetail)
+    }
   }
 
   private bindEvents() {
     this.listener.on("line", (line) => {
+      // console.log(line)
       const headers = ElogAnalysis.getHeader(line)
 
       if (!headers) {
@@ -168,11 +195,43 @@ export class CloudmusicDetector extends Nanobus<{
           this.currentSongPausing = true
           this.currentSongPosition = 0
           this.currentSongRelativeTime = 0
-          this.refreshCurrentSongDetail(data)
+          this.refreshCurrentSongDetail({
+            name: data.name,
+            cover: data.album.cover,
+            albumName: data.album.name,
+            artists: data.artists.map((item) => item.name),
+            duration: data.duration / 1000,
+          })
           this.emit("play", this.currentSongId)
           // this.refreshCurrentSongDetail().then(() => {
           //   this.emit("play", this.currentSongId)
           // })
+
+          break
+        }
+
+        case "PLAY_ONE_TRACKIN_PLAYING_LIST": {
+          console.log(1)
+
+          const { args } = CLOUDMUSIC_ELOG_MATCHES.PLAY_ONE_TRACKIN_PLAYING_LIST
+          const data = args(line)
+
+          if (data === null || +data.id === this.currentSongId) {
+            break
+          }
+
+          this.currentSongId = +data.track.id
+          this.currentSongPausing = true
+          this.currentSongPosition = 0
+          this.currentSongRelativeTime = 0
+          this.refreshCurrentSongDetail({
+            name: data.track.name,
+            cover: data.track.album.cover,
+            albumName: data.track.album.name,
+            artists: data.track.artists.map((item) => item.name),
+            duration: data.track.duration / 1000,
+          })
+          this.emit("play", this.currentSongId)
 
           break
         }
@@ -229,15 +288,18 @@ export class CloudmusicDetector extends Nanobus<{
     this.currentSongRelativeTime = 0
   }
 
-  private async refreshCurrentSongDetail(
-    trackStatus: PlayingPrivilegeCheckResult
-  ) {
-    const detail = trackStatus
-    this.currentSongName = detail.name
-    this.currentSongCover = detail.album.cover
-    this.currentSongAlbumName = detail.album.name
-    this.currentSongArtistNames = detail.artists.map((item) => item.name)
-    this.currentSongDuration = detail.duration / 1000
+  private async refreshCurrentSongDetail({
+    name,
+    cover,
+    albumName,
+    artists,
+    duration,
+  }: TrackIn) {
+    this.currentSongName = name
+    this.currentSongCover = cover
+    this.currentSongAlbumName = albumName
+    this.currentSongArtistNames = artists
+    this.currentSongDuration = duration
   }
 
   public get status(): DetectorStatus {

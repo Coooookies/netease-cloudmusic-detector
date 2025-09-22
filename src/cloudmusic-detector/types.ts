@@ -208,6 +208,14 @@ export type DetectorAvailableStatus = {
   }
 }
 
+export type TrackIn = {
+  name: string
+  cover: string
+  albumName: string
+  artists: string[]
+  duration: number
+}
+
 export type DetectorUnavailableStatus = {
   available: false
   id: -1
